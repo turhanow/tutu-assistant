@@ -1,0 +1,86 @@
+{
+  "hotels": [
+    {
+      "address": "778 м от центра",
+      "alias": "fixture-hotel",
+      "best_offer": {
+        "breakfast_included": null,
+        "checkout_url": "https://www.tutu.ru/fixture",
+        "free_cancellation": true,
+        "highlights": [
+          {
+            "text": "Бесплатная отмена",
+            "type": "policies"
+          }
+        ],
+        "meal_name": null,
+        "offerpack_hash": "fixture-ref",
+        "pay_at_hotel": null,
+        "pay_online": null,
+        "price": {
+          "amount": 16250.0,
+          "currency": "RUB"
+        },
+        "price_basis": "stay_total",
+        "room_name": "Апартаменты L",
+        "room_size_sqm": null
+      },
+      "checkout_ref": {
+        "adults": 1,
+        "check_in": "2026-08-21",
+        "check_out": "2026-08-23",
+        "fallback_url": "https://www.tutu.ru/fixture",
+        "hotel_alias": "fixture-hotel",
+        "hotel_geo_id": "fixture-ref",
+        "search_id": "fixture-ref",
+        "transport": "hotels"
+      },
+      "checkout_url": "https://www.tutu.ru/fixture",
+      "hotel_geo_id": "fixture-ref",
+      "hotel_id": "fixture-ref",
+      "location": {
+        "city": null,
+        "city_geo_id": null,
+        "lat": 55.799152,
+        "lng": 49.119747
+      },
+      "name": "Апарт Отель \"Центральный\"",
+      "photos_total": 52,
+      "rating": 8.92,
+      "review_count": 85,
+      "stars": 0,
+      "tutu_offer_id": "fixture-ref"
+    }
+  ],
+  "meta": {
+    "filters_applied": {
+      "button_filters": [],
+      "changes": [],
+      "option_filters": [],
+      "quick_filters_order": [],
+      "range_filters": []
+    },
+    "geo_id": "fixture-ref",
+    "has_more": true,
+    "page": 1,
+    "page_size": 3,
+    "post_filter_dropped_no_breakfast": 0,
+    "post_filter_dropped_no_free_cancellation": 0,
+    "post_filter_dropped_over_cap": 0,
+    "resolved_geo": {
+      "country": "Россия",
+      "geo_id": "fixture-ref",
+      "geo_type": "locality",
+      "hotels_count": 12733,
+      "name": "Казань",
+      "region": "Республика Татарстан"
+    },
+    "search_id": "fixture-ref",
+    "total_returned": 3
+  },
+  "stay": {
+    "check_in": "2026-08-21",
+    "check_out": "2026-08-23",
+    "nights": 2
+  }
+}

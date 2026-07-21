@@ -1,0 +1,397 @@
+{
+  "version": "v1",
+  "generated_at": "2026-07-21T22:00:00+03:00",
+  "pilot_origins": ["Москва"],
+  "destinations": [
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "kolomna",
+        "name": "Коломна",
+        "region": "Московская область",
+        "aliases": ["Коломна"],
+        "experience_tags": ["architecture", "history", "gastronomy", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["kolomna_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "kolomna_kremlin",
+          "destination_id": "kolomna",
+          "name": "Прогулка по Коломенскому кремлю",
+          "categories": ["architecture", "history", "walking"],
+          "duration": "PT2H30M",
+          "evidence_ids": ["kolomna_portal"]
+        },
+        {
+          "activity_id": "kolomna_pastila",
+          "destination_id": "kolomna",
+          "name": "Знакомство с коломенской пастилой",
+          "categories": ["gastronomy", "museum"],
+          "duration": "PT1H30M",
+          "evidence_ids": ["kolomna_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "kolomna_portal",
+          "title": "Туристический портал городского округа Коломна",
+          "source_url": "https://kolomnavisit.ru/ru/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "tula",
+        "name": "Тула",
+        "region": "Тульская область",
+        "aliases": ["Тула"],
+        "experience_tags": ["architecture", "history", "museum", "gastronomy"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["tula_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "tula_kremlin",
+          "destination_id": "tula",
+          "name": "Тульский кремль и исторический центр",
+          "categories": ["architecture", "history", "walking"],
+          "duration": "PT3H",
+          "evidence_ids": ["tula_portal"]
+        },
+        {
+          "activity_id": "tula_museum_quarter",
+          "destination_id": "tula",
+          "name": "Музейный квартал Тулы",
+          "categories": ["museum", "culture"],
+          "duration": "PT3H",
+          "evidence_ids": ["tula_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "tula_portal",
+          "title": "Официальный туристический портал Тулы и Тульской области",
+          "source_url": "https://visittula.com/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "tver",
+        "name": "Тверь",
+        "region": "Тверская область",
+        "aliases": ["Тверь"],
+        "experience_tags": ["architecture", "history", "museum", "river", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["tver_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "tver_palace",
+          "destination_id": "tver",
+          "name": "Тверской императорский дворец",
+          "categories": ["architecture", "history", "museum"],
+          "duration": "PT2H",
+          "evidence_ids": ["tver_portal"]
+        },
+        {
+          "activity_id": "tver_volga_walk",
+          "destination_id": "tver",
+          "name": "Прогулка по историческому центру и набережной Волги",
+          "categories": ["walking", "river", "architecture"],
+          "duration": "PT3H",
+          "evidence_ids": ["tver_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "tver_portal",
+          "title": "Туристический портал Твери и Тверской области",
+          "source_url": "https://visittver.ru/catalog/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "yaroslavl",
+        "name": "Ярославль",
+        "region": "Ярославская область",
+        "aliases": ["Ярославль"],
+        "experience_tags": ["architecture", "history", "museum", "river", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["yaroslavl_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "yaroslavl_center",
+          "destination_id": "yaroslavl",
+          "name": "Исторический центр и Стрелка",
+          "categories": ["architecture", "history", "river", "walking"],
+          "duration": "PT3H",
+          "evidence_ids": ["yaroslavl_portal"]
+        },
+        {
+          "activity_id": "yaroslavl_museum",
+          "destination_id": "yaroslavl",
+          "name": "Ярославский музей-заповедник",
+          "categories": ["museum", "history", "architecture"],
+          "duration": "PT3H",
+          "evidence_ids": ["yaroslavl_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "yaroslavl_portal",
+          "title": "Туристско-информационный центр Ярославля",
+          "source_url": "https://www.visityar.ru/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "vladimir",
+        "name": "Владимир",
+        "region": "Владимирская область",
+        "aliases": ["Владимир"],
+        "experience_tags": ["architecture", "history", "museum", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["vladimir_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "vladimir_golden_gate",
+          "destination_id": "vladimir",
+          "name": "Золотые ворота и Большая Московская улица",
+          "categories": ["architecture", "history", "walking"],
+          "duration": "PT2H30M",
+          "evidence_ids": ["vladimir_portal"]
+        },
+        {
+          "activity_id": "vladimir_cathedrals",
+          "destination_id": "vladimir",
+          "name": "Соборная площадь и древние соборы",
+          "categories": ["architecture", "history", "culture"],
+          "duration": "PT2H30M",
+          "evidence_ids": ["vladimir_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "vladimir_portal",
+          "title": "Официальный туристический портал Владимирской области",
+          "source_url": "https://vladimirtravel.ru/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "suzdal",
+        "name": "Суздаль",
+        "region": "Владимирская область",
+        "aliases": ["Суздаль"],
+        "experience_tags": ["architecture", "history", "museum", "walking", "relaxed"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["suzdal_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "suzdal_kremlin",
+          "destination_id": "suzdal",
+          "name": "Суздальский кремль и исторический центр",
+          "categories": ["architecture", "history", "walking"],
+          "duration": "PT3H",
+          "evidence_ids": ["suzdal_portal"]
+        },
+        {
+          "activity_id": "suzdal_wooden_museum",
+          "destination_id": "suzdal",
+          "name": "Музей деревянного зодчества",
+          "categories": ["museum", "architecture", "history"],
+          "duration": "PT2H",
+          "evidence_ids": ["suzdal_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "suzdal_portal",
+          "title": "Официальный туристический портал Владимирской области",
+          "source_url": "https://vladimirtravel.ru/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "ryazan",
+        "name": "Рязань",
+        "region": "Рязанская область",
+        "aliases": ["Рязань"],
+        "experience_tags": ["architecture", "history", "museum", "gastronomy", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["ryazan_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "ryazan_kremlin",
+          "destination_id": "ryazan",
+          "name": "Рязанский кремль",
+          "categories": ["architecture", "history", "museum"],
+          "duration": "PT3H",
+          "evidence_ids": ["ryazan_portal"]
+        },
+        {
+          "activity_id": "ryazan_center",
+          "destination_id": "ryazan",
+          "name": "Прогулка по историческому центру Рязани",
+          "categories": ["walking", "architecture", "gastronomy"],
+          "duration": "PT3H",
+          "evidence_ids": ["ryazan_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "ryazan_portal",
+          "title": "Официальный туристический портал Рязани и Рязанской области",
+          "source_url": "https://ryazantourism.ru/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "kaluga",
+        "name": "Калуга",
+        "region": "Калужская область",
+        "aliases": ["Калуга"],
+        "experience_tags": ["science", "space", "museum", "architecture", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["kaluga_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "kaluga_space_museum",
+          "destination_id": "kaluga",
+          "name": "Музей истории космонавтики",
+          "categories": ["science", "space", "museum"],
+          "duration": "PT3H",
+          "evidence_ids": ["kaluga_portal"]
+        },
+        {
+          "activity_id": "kaluga_old_city",
+          "destination_id": "kaluga",
+          "name": "Старый город и Каменный мост",
+          "categories": ["architecture", "history", "walking"],
+          "duration": "PT2H30M",
+          "evidence_ids": ["kaluga_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "kaluga_portal",
+          "title": "Единый туристический портал Калужской области",
+          "source_url": "https://visit-kaluga.ru/?language=ru",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "sergiev_posad",
+        "name": "Сергиев Посад",
+        "region": "Московская область",
+        "aliases": ["Сергиев Посад"],
+        "experience_tags": ["architecture", "history", "museum", "craft", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["sergiev_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "sergiev_lavra",
+          "destination_id": "sergiev_posad",
+          "name": "Архитектурный ансамбль Троице-Сергиевой лавры",
+          "categories": ["architecture", "history", "culture"],
+          "duration": "PT3H",
+          "evidence_ids": ["sergiev_portal"]
+        },
+        {
+          "activity_id": "sergiev_konny_dvor",
+          "destination_id": "sergiev_posad",
+          "name": "Музейный комплекс «Конный двор»",
+          "categories": ["museum", "history", "craft"],
+          "duration": "PT2H30M",
+          "evidence_ids": ["sergiev_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "sergiev_portal",
+          "title": "Туристско-информационный центр «Гостеприимный Сергиев Посад»",
+          "source_url": "https://visit-sposad.ru/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    },
+    {
+      "catalog_version": "v1",
+      "destination": {
+        "destination_id": "nizhny_novgorod",
+        "name": "Нижний Новгород",
+        "region": "Нижегородская область",
+        "aliases": ["Нижний Новгород", "Нижний"],
+        "experience_tags": ["architecture", "history", "museum", "river", "walking"],
+        "season_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "typical_visit_duration": "P2D",
+        "evidence_ids": ["nizhny_portal"]
+      },
+      "activities": [
+        {
+          "activity_id": "nizhny_kremlin",
+          "destination_id": "nizhny_novgorod",
+          "name": "Нижегородский кремль",
+          "categories": ["architecture", "history", "museum"],
+          "duration": "PT3H",
+          "evidence_ids": ["nizhny_portal"]
+        },
+        {
+          "activity_id": "nizhny_center",
+          "destination_id": "nizhny_novgorod",
+          "name": "Большая Покровская и исторические набережные",
+          "categories": ["walking", "architecture", "river"],
+          "duration": "PT3H",
+          "evidence_ids": ["nizhny_portal"]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "nizhny_portal",
+          "title": "Туристический сайт Нижнего Новгорода VisitNizhniy",
+          "source_url": "https://visitnizhniy.com/",
+          "retrieved_at": "2026-07-21T22:00:00+03:00"
+        }
+      ]
+    }
+  ]
+}

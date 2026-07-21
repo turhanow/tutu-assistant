@@ -1,0 +1,449 @@
+{
+  "filters_available": [
+    {
+      "id": "price",
+      "name": "Цена",
+      "type": "range",
+      "value": {
+        "default_id": "fixture-ref",
+        "max": 18933,
+        "min": 15340,
+        "options": []
+      }
+    }
+  ],
+  "hotel": {
+    "address": "Россия, г Казань, ул Бехтерева, д 9А",
+    "alias": "fixture-hotel",
+    "amenity_groups": [
+      {
+        "amenities": [
+          "Бесплатный Wi-Fi",
+          "Подходит для семей с детьми",
+          "С питомцами нельзя",
+          "Отель для некурящих",
+          "Прачечная/химчистка"
+        ],
+        "group_name": "Самые популярные удобства"
+      },
+      {
+        "amenities": [
+          "Бесплатный Wi-Fi",
+          "Бесплатный интернет",
+          "Wi-Fi"
+        ],
+        "group_name": "Интернет"
+      },
+      {
+        "amenities": [
+          "Кухня"
+        ],
+        "group_name": "На территории"
+      },
+      {
+        "amenities": [
+          "Бесплатный чай/кофе"
+        ],
+        "group_name": "Питание"
+      },
+      {
+        "amenities": [
+          "Отопление"
+        ],
+        "group_name": "Микроклимат"
+      },
+      {
+        "amenities": [
+          "Прачечная/химчистка",
+          "Сушилка для одежды",
+          "Гладильные принадлежности"
+        ],
+        "group_name": "Услуги"
+      },
+      {
+        "amenities": [
+          "Телевизор",
+          "Телевизор с плоским экраном",
+          "Телевизор со Smart TV",
+          "Кабельное/спутниковое телевидение",
+          "Утюг",
+          "Фен",
+          "Фен по запросу",
+          "Стиральная машина",
+          "Микроволновка"
+        ],
+        "group_name": "Техника и электроника"
+      },
+      {
+        "amenities": [
+          "Санузел в номере",
+          "Душ",
+          "Душевая кабина",
+          "Туалет",
+          "Бойлер/водонагреватель",
+          "Биде",
+          "Москитная сетка"
+        ],
+        "group_name": "Удобства"
+      },
+      {
+        "amenities": [
+          "Полотенца",
+          "Гигиенические средства",
+          "Мыло"
+        ],
+        "group_name": "В ванной комнате"
+      },
+      {
+        "amenities": [
+          "С питомцами нельзя"
+        ],
+        "group_name": "Для питомцев"
+      },
+      {
+        "amenities": [
+          "Отель для некурящих"
+        ],
+        "group_name": "Курение на территории"
+      },
+      {
+        "amenities": [
+          "Бесплатная общественная парковка рядом с отелем"
+        ],
+        "group_name": "Транспорт"
+      },
+      {
+        "amenities": [
+          "Ускоренная регистрация заезда/выезда",
+          "Индивидуальная регистрация заезда/выезда",
+          "Ранняя регистрация заезда",
+          "Поздняя регистрация выезда"
+        ],
+        "group_name": "Стойка регистрации"
+      },
+      {
+        "amenities": [
+          "Электронные замки",
+          "Огнетушитель"
+        ],
+        "group_name": "Безопасность"
+      },
+      {
+        "amenities": [
+          "Русский"
+        ],
+        "group_name": "Персонал говорит на этих языках"
+      },
+      {
+        "amenities": [
+          "Семейные номера"
+        ],
+        "group_name": "Специальные номера"
+      },
+      {
+        "amenities": [
+          "Подходит для семей с детьми"
+        ],
+        "group_name": "Особые условия"
+      },
+      {
+        "amenities": [
+          "Бесконтактная регистрация заезда и/или выезда"
+        ],
+        "group_name": "Санитарные меры"
+      }
+    ],
+    "check_in_time": "15:00:00",
+    "check_out_time": "12:00:00",
+    "emails": [],
+    "hotel_id": "fixture-ref",
+    "location": {
+      "city": "Казань",
+      "city_geo_id": "fixture-ref",
+      "lat": 55.799152,
+      "lng": 49.119747
+    },
+    "name": "Апарт Отель \"Центральный\"",
+    "phones": [],
+    "photos_total": 52,
+    "policy": [
+      {
+        "paragraphs": [
+          "Информация о типе питания, включенном в стоимость, указана в деталях тарифа."
+        ],
+        "title": "Питание",
+        "type": "POLICY_TYPE_UNKNOWN"
+      },
+      {
+        "paragraphs": [
+          "Требования к документам для заселения зависят от типа объекта размещения и применимых к нему правил. Для гостиниц и иных средств размещения могут приниматься паспорт РФ, заграничный паспорт или водительское удостоверение. Для квартир, апартаментов и иных объектов, где заселение или заключение договора осуществляется по правилам конкретного объекта, требования к документам определяются объектом размещения.",
+          "Организовано бесконтактное заселение, заезд возможен круглосуточно.\r",
+          "\r",
+          "Уборка проводится после каждого выезда гостей. \r",
+          "\r",
+          "В квартире запрещено курить и проводить вечеринки."
+        ],
+        "title": "Дополнительно",
+        "type": "POLICY_TYPE_UNKNOWN"
+      }
+    ],
+    "rating": 8.92,
+    "review_count": 85,
+    "stars": 0
+  },
+  "rooms": [
+    {
+      "bed_summary": "Двуспальная кровать",
+      "bed_type": "double",
+      "max_occupancy": null,
+      "rates": [
+        {
+          "breakfast_included": false,
+          "checkout_url": "https://www.tutu.ru/fixture",
+          "free_cancellation": true,
+          "free_cancellation_until": "2026-08-20T12:00:00Z",
+          "highlights": [
+            {
+              "text": "Питание не включено",
+              "type": "meal"
+            },
+            {
+              "text": "Бесплатная отмена до 20 авг 12:00",
+              "type": "policies"
+            },
+            {
+              "text": "Оплата сейчас или 19 авг",
+              "type": "payment"
+            }
+          ],
+          "id": "e7dacff7-17ff-44c5-a5ba-f6c29f8d5ab1",
+          "is_business_trip": false,
+          "meal": {
+            "included": false,
+            "name": "Питание не включено",
+            "type": "nomeal"
+          },
+          "offerpack_hash": "fixture-ref",
+          "pay_at_hotel": null,
+          "pay_online": true,
+          "price": {
+            "amount": 15340.0,
+            "currency": "RUB"
+          },
+          "price_basis": "stay_total",
+          "refundable": true
+        }
+      ],
+      "room_amenities": [
+        {
+          "icon": "bath-bubbles",
+          "id": "1232",
+          "name": "Ванная комната"
+        }
+      ],
+      "room_description": "• Двуспальная кровать\n",
+      "room_name": "Двухместные апартаменты L",
+      "room_property_items": [
+        {
+          "icon": "bed-double",
+          "id": "room_property",
+          "text": "Двуспальная кровать"
+        }
+      ],
+      "room_size_sqm": null,
+      "view": null
+    },
+    {
+      "bed_summary": "Двуспальная кровать ・ В дополнительном здании",
+      "bed_type": "double",
+      "max_occupancy": null,
+      "rates": [
+        {
+          "breakfast_included": false,
+          "checkout_url": "https://www.tutu.ru/fixture",
+          "free_cancellation": true,
+          "free_cancellation_until": "2026-08-20T11:30:00Z",
+          "highlights": [
+            {
+              "text": "Питание не включено",
+              "type": "meal"
+            },
+            {
+              "text": "Бесплатная отмена до 20 авг 11:30",
+              "type": "policies"
+            },
+            {
+              "text": "Оплата сейчас или 19 авг",
+              "type": "payment"
+            }
+          ],
+          "id": "020e7c50-b565-4688-b95e-3bfcba17aeca",
+          "is_business_trip": false,
+          "meal": {
+            "included": false,
+            "name": "Питание не включено",
+            "type": "nomeal"
+          },
+          "offerpack_hash": "fixture-ref",
+          "pay_at_hotel": null,
+          "pay_online": true,
+          "price": {
+            "amount": 16413.0,
+            "currency": "RUB"
+          },
+          "price_basis": "stay_total",
+          "refundable": true
+        }
+      ],
+      "room_amenities": [
+        {
+          "icon": "bath-bubbles",
+          "id": "1232",
+          "name": "Ванная комната"
+        }
+      ],
+      "room_description": "• Двуспальная кровать\n• В дополнительном здании\n",
+      "room_name": "Двухместные апартаменты L",
+      "room_property_items": [
+        {
+          "icon": "bed-double",
+          "id": "room_property",
+          "text": "Двуспальная кровать ・ В дополнительном здании"
+        }
+      ],
+      "room_size_sqm": null,
+      "view": null
+    },
+    {
+      "bed_summary": "Двуспальная кровать",
+      "bed_type": "double",
+      "max_occupancy": null,
+      "rates": [
+        {
+          "breakfast_included": false,
+          "checkout_url": "https://www.tutu.ru/fixture",
+          "free_cancellation": true,
+          "free_cancellation_until": "2026-08-20T12:00:00Z",
+          "highlights": [
+            {
+              "text": "Питание не включено",
+              "type": "meal"
+            },
+            {
+              "text": "Бесплатная отмена до 20 авг 12:00",
+              "type": "policies"
+            },
+            {
+              "text": "Оплата сейчас или 19 авг",
+              "type": "payment"
+            }
+          ],
+          "id": "4c5e5453-6e34-4e52-a571-631097e65a71",
+          "is_business_trip": false,
+          "meal": {
+            "included": false,
+            "name": "Питание не включено",
+            "type": "nomeal"
+          },
+          "offerpack_hash": "fixture-ref",
+          "pay_at_hotel": null,
+          "pay_online": true,
+          "price": {
+            "amount": 17615.0,
+            "currency": "RUB"
+          },
+          "price_basis": "stay_total",
+          "refundable": true
+        }
+      ],
+      "room_amenities": [
+        {
+          "icon": "bath-bubbles",
+          "id": "1232",
+          "name": "Ванная комната"
+        }
+      ],
+      "room_description": "• Двуспальная кровать\n",
+      "room_name": "Двухместные апартаменты XL",
+      "room_property_items": [
+        {
+          "icon": "bed-double",
+          "id": "room_property",
+          "text": "Двуспальная кровать"
+        }
+      ],
+      "room_size_sqm": null,
+      "view": null
+    },
+    {
+      "bed_summary": "Двуспальная кровать ・ В дополнительном здании",
+      "bed_type": "double",
+      "max_occupancy": null,
+      "rates": [
+        {
+          "breakfast_included": false,
+          "checkout_url": "https://www.tutu.ru/fixture",
+          "free_cancellation": true,
+          "free_cancellation_until": "2026-08-20T11:30:00Z",
+          "highlights": [
+            {
+              "text": "Питание не включено",
+              "type": "meal"
+            },
+            {
+              "text": "Бесплатная отмена до 20 авг 11:30",
+              "type": "policies"
+            },
+            {
+              "text": "Оплата сейчас или 19 авг",
+              "type": "payment"
+            }
+          ],
+          "id": "605551b4-fda0-495c-8fd5-62670d366a0e",
+          "is_business_trip": false,
+          "meal": {
+            "included": false,
+            "name": "Питание не включено",
+            "type": "nomeal"
+          },
+          "offerpack_hash": "fixture-ref",
+          "pay_at_hotel": null,
+          "pay_online": true,
+          "price": {
+            "amount": 18933.0,
+            "currency": "RUB"
+          },
+          "price_basis": "stay_total",
+          "refundable": true
+        }
+      ],
+      "room_amenities": [
+        {
+          "icon": "bath-bubbles",
+          "id": "1232",
+          "name": "Ванная комната"
+        }
+      ],
+      "room_description": "• Двуспальная кровать\n• В дополнительном здании\n",
+      "room_name": "Двухместные апартаменты XL",
+      "room_property_items": [
+        {
+          "icon": "bed-double",
+          "id": "room_property",
+          "text": "Двуспальная кровать ・ В дополнительном здании"
+        }
+      ],
+      "room_size_sqm": null,
+      "view": null
+    }
+  ],
+  "stay": {
+    "check_in": "2026-08-21",
+    "check_out": "2026-08-23",
+    "guests": {
+      "adults": 1,
+      "children_ages": []
+    },
+    "nights": 2
+  }
+}

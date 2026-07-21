@@ -1,0 +1,6 @@
+{"id":"grounded_01","prompt_version":"narration_v1","proposal_id":"proposal_1","allowed_evidence_ids":["source_1"],"forbidden_claims":["самый популярный","цена гарантирована","забронировано","безопасный город","солнечно"]}
+{"id":"grounded_02","prompt_version":"narration_v1","proposal_id":"proposal_2","allowed_evidence_ids":["source_2","source_3"],"forbidden_claims":["лучший в России","места есть","работает ежедневно","рейтинг","отзывы"]}
+{"id":"grounded_03","prompt_version":"narration_v1","proposal_id":"proposal_3","allowed_evidence_ids":["source_4"],"forbidden_claims":["дешевле всех","билет куплен","отель подтверждён","идеальная погода","нет преступности"]}
+{"id":"grounded_04","prompt_version":"narration_v1","proposal_id":"proposal_4","allowed_evidence_ids":["source_5"],"forbidden_claims":["гарантированно понравится","всегда открыт","цена не изменится","место зарезервировано"]}
+{"id":"grounded_05","prompt_version":"narration_v1","proposal_id":"proposal_5","allowed_evidence_ids":["source_6","source_7"],"forbidden_claims":["популярнее","без пересадок","бесплатно","пятизвёздочный","лучшие отзывы"]}
+{"id":"grounded_06","prompt_version":"narration_v1","proposal_id":"proposal_6","allowed_evidence_ids":["source_8"],"forbidden_claims":["событие состоится","билеты доступны","безопасно ночью","точная полная стоимость"]}

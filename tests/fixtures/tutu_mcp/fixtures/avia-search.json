@@ -1,0 +1,192 @@
+{
+  "meta": {
+    "carriers_available": [
+      {
+        "name": "Победа",
+        "offers_count": 3,
+        "price_from": 4527.0
+      },
+      {
+        "name": "Аэрофлот",
+        "offers_count": 11,
+        "price_from": 7314.0
+      },
+      {
+        "name": "S7 Airlines",
+        "offers_count": 1,
+        "price_from": 7729.0
+      },
+      {
+        "name": "Nordwind Airlines",
+        "offers_count": 1,
+        "price_from": 8230.0
+      },
+      {
+        "name": "Utair",
+        "offers_count": 2,
+        "price_from": 11423.0
+      }
+    ],
+    "from": {
+      "geo_id": "fixture-ref",
+      "iata": "MOW",
+      "name": "Москва",
+      "region": "Москва город федерального значения"
+    },
+    "has_more": true,
+    "page": 1,
+    "page_size": 3,
+    "post_filter_dropped_not_direct": 0,
+    "post_filter_dropped_over_cap": 0,
+    "post_filter_dropped_wrong_carrier": 0,
+    "return_date": null,
+    "round_trip": false,
+    "sort": "price_asc",
+    "to": {
+      "geo_id": "fixture-ref",
+      "iata": "KZN",
+      "name": "Казань",
+      "region": "городской округ Казань, Республика Татарстан"
+    },
+    "total_matched": 18,
+    "total_matched_exact": true,
+    "total_returned": 3,
+    "transport": "avia",
+    "upstream_note": null
+  },
+  "offers": [
+    {
+      "arrival_at": "2026-08-21T18:45:00+03:00",
+      "carriers": [
+        "Победа"
+      ],
+      "checkout_ref": {
+        "arrival_avia_id": "fixture-ref",
+        "arrival_geo_city_id": 1,
+        "departure_at": "2026-08-21T17:15:00+03:00",
+        "departure_avia_id": "fixture-ref",
+        "departure_geo_city_id": 1,
+        "is_round_trip": false,
+        "offer_hash": "fixture-ref",
+        "passengers_child": 0,
+        "passengers_full": 1,
+        "passengers_infant": 0,
+        "search_results_url": "https://www.tutu.ru/fixture",
+        "service_class": "ECONOMIC",
+        "transport": "avia"
+      },
+      "departure_at": "2026-08-21T17:15:00+03:00",
+      "duration_min": 90,
+      "legs": [
+        {
+          "arrival_at": "2026-08-21T18:45:00+03:00",
+          "departure_at": "2026-08-21T17:15:00+03:00",
+          "duration_min": 90,
+          "from": "Москва — Шереметьево (SVO), терм. D",
+          "label": "outbound",
+          "segments": [
+            {
+              "arrival_at": "2026-08-21T18:45:00+03:00",
+              "carrier": "Победа",
+              "departure_at": "2026-08-21T17:15:00+03:00",
+              "duration_min": 90,
+              "from": "Москва — Шереметьево (SVO), терм. D",
+              "from_geo_point_id": 1,
+              "to": "Казань, KZN, терм. 1",
+              "to_geo_point_id": 1,
+              "voyage_no": "DP-6843"
+            }
+          ],
+          "to": "Казань, KZN, терм. 1"
+        }
+      ],
+      "offer_id": "fixture-ref",
+      "price": {
+        "amount": 4527.0,
+        "currency": "RUB"
+      },
+      "search_results_url": "https://www.tutu.ru/fixture",
+      "segments_count": 1,
+      "transport": "avia",
+      "variants": [
+        {
+          "conditions": {
+            "baggage": {
+              "kg": 0,
+              "pieces": 0
+            },
+            "cabin_baggage": {
+              "dimensions": "36 × 30 × 27",
+              "kg": null,
+              "pieces": 1
+            },
+            "changeable": false,
+            "fare_family": "Базовый",
+            "refundable": false
+          },
+          "offer_hash": "fixture-ref",
+          "price": {
+            "amount": 4527.0,
+            "currency": "RUB"
+          },
+          "service_class": "ECONOMIC",
+          "variant_id": "fixture-ref"
+        },
+        {
+          "conditions": {
+            "baggage": {
+              "kg": 10,
+              "pieces": 1
+            },
+            "cabin_baggage": {
+              "dimensions": "36 × 30 × 27",
+              "kg": null,
+              "pieces": 1
+            },
+            "changeable": true,
+            "exchange": {
+              "available": true,
+              "deadline_hours": 48
+            },
+            "fare_family": "Выгодный",
+            "refundable": false
+          },
+          "offer_hash": "fixture-ref",
+          "price": {
+            "amount": 7377.0,
+            "currency": "RUB"
+          },
+          "service_class": "ECONOMIC",
+          "variant_id": "fixture-ref"
+        },
+        {
+          "conditions": {
+            "baggage": {
+              "kg": 20,
+              "pieces": 1
+            },
+            "cabin_baggage": {
+              "dimensions": "36 × 30 × 27",
+              "kg": null,
+              "pieces": 1
+            },
+            "changeable": true,
+            "exchange": {
+              "available": true,
+              "deadline_hours": 48
+            },
+            "fare_family": "Максимум",
+            "refundable": true
+          },
+          "offer_hash": "fixture-ref",
+          "price": {
+            "amount": 10687.0,
+            "currency": "RUB"
+          },
+          "service_class": "ECONOMIC",
+          "variant_id": "fixture-ref"
+        }
+      ]
+    }
+  ]
+}

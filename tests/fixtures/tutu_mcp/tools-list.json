@@ -1,0 +1,2428 @@
+{
+  "capturedAt": "2026-07-21T16:49:20.166894+00:00",
+  "endpoint": "https://mcp.tutu.ru/mcp",
+  "initialize": {
+    "_meta": null,
+    "capabilities": {
+      "completions": null,
+      "experimental": {},
+      "logging": null,
+      "prompts": {
+        "listChanged": false
+      },
+      "resources": {
+        "listChanged": false,
+        "subscribe": false
+      },
+      "tasks": null,
+      "tools": {
+        "listChanged": false
+      }
+    },
+    "instructions": "Tutu.ru search MCP: read-only search across hotels + avia / rail / bus /\netrain, plus checkout-link building. No payments, no personal accounts, no bookings on Tutu's side.\n\nThis block is intentionally thin. Per-domain fields, edge-cases and\npresentation rules live in the `get_<domain>_instructions` tools — read\nthem on demand (see \"Per-domain playbooks\" below).\n\n## Per-domain playbooks (progressive disclosure)\nBefore you work with a domain you have NOT used yet this session, call\nits instruction tool once and read the playbook — it carries the detailed\nfields, edge-cases, grounding and presentation rules kept out of this\nalways-on block:\n- avia -> `get_avia_instructions`\n- rail -> `get_rail_instructions`\n- bus -> `get_bus_instructions`\n- etrain -> `get_etrain_instructions`\n- hotels -> `get_hotels_instructions`\n- multitransport -> `get_multitransport_instructions`\n\n## Two-step flow for any booking intent\n1. Search: call one of `search_hotels`, `search_avia`, `search_rail`,\n   `search_bus`, `search_etrain`, or `search_multitransport`. Legacy\n   aliases are accepted: `from_city`/`to_city` for `origin`/`destination`,\n   `checkin_date`/`checkout_date` for hotel dates.\n2. Each transport offer carries `price` (cheapest variant),\n   `legs[].segments[]`, `search_results_url`, an optional ready\n   `checkout_url`, and a `checkout_ref` handoff object. Avia/bus/etrain\n   offers also carry `variants[]` (every fare family, cheapest-first, each\n   with its own `offer_hash`); rail offers instead carry a `fares`\n   summary `{count, price_from, price_to, currency, refundable_count?,\n   changeable_count?}` in the default `compact` view — the full per-class\n   ladder (купе / плацкарт / СВ with names + amenities) comes from\n   `get_offer_details`. Hotels carry `best_offer.checkout_url` (a ready\n   per-hotel page) plus a `checkout_ref` for the `explicit/hotel` deeplink.\n3. Optional detail card before checkout: `get_offer_details`. Rail also\n   exposes `get_rail_seatmap` for per-car seat layout.\n4. Checkout: `create_checkout_link` is the single handle for ALL products —\n   pass the offer's `checkout_ref`. It returns `{checkout_url, kind}` — a link\n   the user opens (their browser creates the cart in their session; we never\n   create one server-side):\n   - avia → `checkout_url` (an `mtp-deeplink` to the purchase page — opens\n     the cart only from a browser that already has a tutu session; a cold /\n     Telegram-webview user lands on the avia search, picks the flight there)\n     + `search_results_url` for browsing. Direct round-trip avia is\n     deeplinkable — forward `checkout_ref.is_round_trip` AND\n     `return_departure_at` and the deeplink carries both legs. Connecting\n     round-trip falls back to search (`kind=\"search_redirect\"`) because\n     `explicit/avia` currently supports one flight per direction; without\n     `return_departure_at` it also falls back to search. Forward\n     `passengers_full/child/infant` from\n     `checkout_ref` so the cart requests the SAME party — omit them and Tutu\n     opens the cart with one adult, so the total won't match what you quoted.\n     Have the user confirm the passenger count in the cart. For a non-cheapest\n     fare override `offer_hash` + `service_class` from the chosen `variants[i]`\n     (keep forwarding `is_round_trip` + `return_departure_at`). An offer flagged\n     `is_multi_pnr` (one-way OR round-trip) means separate tickets /\n     self-transfer — relay its `multi_pnr_note` before checkout.\n   - rail / bus → an `explicit/train` / `explicit/bus` deeplink. Default\n     (`kind=\"deeplink\"`): opens the seat-selection page in the user's\n     session. With a user-confirmed seat choice (rail: `car_number` +\n     `seat_numbers` from `get_rail_seatmap`; bus: `seat_numbers` from\n     `get_offer_details`) it instead mints the cart with those seats\n     pre-selected (`kind=\"checkout_deeplink\"`, works in a cold browser;\n     the cart belongs to whoever opens the link). Only use the cart mode\n     after the user explicitly picked seats. If `checkout_ref` lacks the\n     deeplink ids it falls back to the pre-filled order/seats page\n     (`kind=\"order_url\"`/`\"seats_url\"`).\n   - etrain → schedule-page URL.\n   - hotels → an `explicit/hotel` deeplink: default (`kind=\"deeplink\"`) opens\n     the hotel page to pick a room; pass a ROOM rate's `offerpack_hash` (from\n     `get_offer_details`) to mint the cart straight-to-cart\n     (`kind=\"checkout_deeplink\"`, cold-safe, falls back to the page if the\n     pack expired). The listing `best_offer.offerpack_hash` does NOT mint a\n     cart — use a room hash. `best_offer.checkout_url` stays a direct page.\n   Surface `checkout_url` once the user has chosen; `search_results_url` while\n   comparing. Do NOT guess per-field shapes — they live in the tool's\n   `description=` and the playbooks.\n\nPagination: `page` (1-indexed, <=10) + `page_size` (1..30, default 10);\ncheck `meta.has_more` before bumping the page. Per-mode transport `sort`:\n`price_asc` (default) / `price_desc` / `duration_asc` / `departure_asc`;\n`search_multitransport` uses `optimize_for: 'price'|'time'` instead.\n\nTransport filters (all `search_*`, applied server-side): `price_max`,\n`direct_only` (nonstop only), `carriers` (by carrier). For carrier filtering\nread `meta.carriers_available` first — it's the per-route carrier reference\n(`name` + `offers_count` + `price_from`, derived from the fetched pool) — and\nfilter by echoing a `name` from it, never by guessing spelling (\"aeroflot\" ≠\n\"Аэрофлот\").\nWhat each filter removed is in `meta.post_filter_dropped_*`. A filter fetches\nthe full route pool before filtering, so it returns ALL matches in one search\n(`meta.total_matched` = how many matched in total; up to `page_size` per page,\npaginate only for the rest) — no page-walking to collect a carrier, and\n`has_more` stays honest.\n\nDetail level (`view`, default `compact`): every read tool — `search_*`,\n`get_offer_details`, `get_rail_seatmap` — takes the same `compact|full`\nknob and defaults to `compact`. Keep it lean: `compact` is the right\ndefault for choosing between options, and you reach for the narrowing\ndetail on the 1-3 offers the user is actually weighing, not the whole\npage. Widen only on explicit need: the full fare breakdown inline\n(`view='full'`), the exact hotel cancellation ladder (`view='rules'`), raw\nseat geometry, or a pointed seat question (`task=` on `get_rail_seatmap` —\n\"best seats + why\" instead of the whole map). `full` never adds a fact\n`compact` hid the existence of — it just expands verbose blocks.\n\n## Side effects\nThis server has no side effects on Tutu's side. Every search/detail tool is\nread-only and `create_checkout_link` is a PURE URL builder for all products —\nit returns a link the USER opens, and their browser creates the cart in their\nown session (we never mint a cart server-side; a server-minted cart is\nsession-bound and 404s for the user). avia/rail/bus/hotels → a Tutu\n`mtp-deeplink` redirector that 302's to the seat/room-selection or purchase\npage (rail/bus/hotels can mint the cart straight in the user's session);\netrain → the schedule page. No payment, no PII, no bookings — the checkout\npage is where the user pays.\n\n## Output & grounding rules (all domains)\n- Quote reviews verbatim. When `hotel.reviews[].texts[].text` is present,\n  give 1-2 short direct fragments per pros/cons bullet, each with the\n  review date in parentheses; don't paraphrase generic praise. Mention the\n  oldest -> newest date span you used.\n- Never invent options. Don't describe a hotel/flight/train/bus that isn't\n  in the current `hotels[]` / `offers[]`. If the user asks for one you\n  don't have, say so explicitly and offer to refine.\n- Never substitute web search or general knowledge for missing payload\n  fields. If a field is null/absent (baggage, refund rules, fare-family\n  name, carrier rating, sea proximity, breakfast quality, ...), say\n  \"Tutu не вернул это поле в текущем ответе\" — this is the single largest\n  failure mode in agent transcripts. The IATA-code carve-out is the only\n  exception (see the avia playbook).\n- Bus stops: show names/addresses from `legs`, `checkout_ref.*_stop_name`,\n  or `get_offer_details`; never show raw stop ids as the only description.\n- City disambiguation: every search echoes what it resolved in\n  `meta.from` / `meta.to` (and `meta.resolved_geo` for hotels) with\n  `name` + `geo_id` + `region`. State which населённый пункт and область\n  you searched. When the resolved side carries `also_named[]` (a homonym\n  was possible), name the chosen city+область AND mention the\n  alternative(s) with a one-line invitation to correct; omit when absent.\n- Emoji (one per entity, no clutter): ⭐ rating, 🚆 rail, ✈️ avia,\n  🚌 bus, 🚊 etrain, ➕/➖ pros/cons, 🔗 before any URL.\n- Prices: render `amount` + `currency` exactly as in the payload; don't\n  round. A hotel price (`best_offer.price`, `rooms[].rates[].price`; tagged\n  `price_basis=\"stay_total\"`) is ALREADY the total for the requested stay\n  and guest composition — render it as returned and NEVER multiply it by\n  `stay.nights`. Use `stay.nights` only to label it, e.g. \"за N ночей\".\n- Always surface `checkout_url` / `search_results_url` next to the picked\n  option without waiting for the user to ask.\n\n## Resources & how to reach docs\nSome MCP clients auto-inject `tutu://*` resources; many don't. If you\ndon't see one in your prompt, call `fetch_resource` with its URI.\n- Per-domain playbooks are TOOLS (`get_<domain>_instructions`), not\n  resources — prefer them for how-to detail.\n- `tutu://help/overview` — short overview / index.\n- `tutu://geo` — city/point ids. `tutu://amenities/dictionary` — amenity\n  code -> Russian label. `tutu://status` — upstream health.\n- `tutu://special-offers` — experimental inspiration only, not truth.\n- `tutu://version`, `tutu://debug/memory` — diagnostics (read only when\n  investigating).",
+    "protocolVersion": "2025-11-25",
+    "serverInfo": {
+      "icons": null,
+      "name": "tutu-mcp-server",
+      "title": null,
+      "version": "0.26.0",
+      "websiteUrl": null
+    }
+  },
+  "pages": [
+    {
+      "_meta": null,
+      "nextCursor": null,
+      "tools": [
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Search Tutu hotel listings for a given city and date range. Resolve `city_name` (string) OR pass `geo_id` (Tutu internal). Returns hotels with `name`, `stars`, `rating`, `address`, `hotel_id` / `hotel_geo_id` (numeric id for get_offer_details), `tutu_offer_id` (listing UUID, not accepted by details), `review_summary` (when Tutu has reviews), `location`, `photos`, `best_offer` (`price` + `offerpack_hash` + `checkout_url` + `room_size_sqm` (room area in m² when Tutu wrote it in the room name, often as a minimum 'от N'; `null` when absent — say so, don't infer) + normalized rate features: `breakfast_included`, `meal_name`, `free_cancellation`, `pay_at_hotel`, `pay_online`, plus raw `highlights[]` for promo/context badges) — here `checkout_url` IS a real per-hotel page (`hotel.tutu.ru/offers/details?...`) with dates and room composition pre-filled, unlike the transport tools. For checkout you can hand over `best_offer.checkout_url` directly, OR call `create_checkout_link` with the row's `checkout_ref` for the `explicit/hotel` deeplink — it opens the hotel page to pick a room, or mints the cart straight-to-cart when you pass a ROOM rate's `offerpack_hash` from `get_offer_details` (the listing `best_offer.offerpack_hash` does NOT mint a cart). Filters: `stars`, `meals`, `hotel_types`, `min_rating`, `price_max`, `free_cancellation`, `breakfast_included`, `hotel_amenities` (e.g. `pool`, `parking`, `wifi`, `spa`), `room_amenities` (e.g. `sea_view`, `balcony`, `air_conditioner`). Paginated (`page`+`page_size`, see `meta.has_more`). Read-only, no booking. When the request is broad, many hotels are viable, and you don't know the user's preferences — do NOT call this tool yet: ask one short batch of clarifying questions FIRST (bed setup, breakfast, free-cancel, view/location; 2-4 questions max). Skip only on explicit minimal-selection signals ('just the cheapest', 'выбери сам', 'лишь бы переночевать'). Generic positive framing ('хорошее место', 'бюджет не критичен') is NOT a preference signal — still ask. When the per-room / per-rate confirmation field for the asked-for feature is missing or mismatched — `rooms[i].view` / `rooms[i].bed_type` for view/bed, or `rooms[i].rates[j].breakfast_included` / `rooms[i].rates[j].free_cancellation` for the rate-level facets, or `best_offer.{breakfast_included,free_cancellation}` when only listing data is available — label the status next to the recommendation; never substitute silently. Full rules in `get_hotels_instructions` (clarifying questions, geo_id pitfall, view/bed grounding). Grounding: rating, review count, amenities and pros/cons must come from `review_summary`, `review_summary.aspects` and from `get_offer_details(product_type='hotel', ...)`. The `best_offer` fields describe ONLY the cheapest visible rate of one room — to compare room categories (standard / comfort / suite, beds, view, size) and full per-rate options, call `get_offer_details`. Never invent guest quotes or substitute generic city-level praise when the hotel-level field is empty. `best_offer.price` is the TOTAL for the whole requested stay and guest composition (`price_basis=\"stay_total\"`, the night count already included) — render it as-is and NEVER multiply it by the number of nights; `stay.nights` is there only to label it 'за N ночей'. See `get_hotels_instructions`.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "default": 1,
+                "description": "Number of adult guests.",
+                "maximum": 6,
+                "minimum": 1,
+                "title": "Adults",
+                "type": "integer"
+              },
+              "breakfast_included": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: keep only offers whose cheapest rate includes breakfast. Shortcut for `meals=['breakfast']` plus the `popular_filters` quick toggle.",
+                "title": "Breakfast Included"
+              },
+              "check_in": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Check-in date, YYYY-MM-DD. `checkin_date` is accepted as a backward-compatible alias.",
+                "title": "Check In"
+              },
+              "check_out": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Check-out date, YYYY-MM-DD. `checkout_date` is accepted as a backward-compatible alias. Must be after check_in.",
+                "title": "Check Out"
+              },
+              "checkin_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `check_in`.",
+                "title": "Checkin Date"
+              },
+              "checkout_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `check_out`.",
+                "title": "Checkout Date"
+              },
+              "children_ages": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Ages of accompanying children, e.g. [6, 12]. Empty/None = no children.",
+                "title": "Children Ages"
+              },
+              "city_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "City name (Russian; English/translit also accepted). Resolved via Tutu's hotel-specific, region-aware geo index: a resort name lands the whole zone (e.g. «Курорт Архыз» covering several посёлки), a city lands that city. `meta.resolved_geo` reports `geo_type` (region|locality), `hotels_count` and `also_geo` alternatives. PREFER this over passing `geo_id` directly. Mutually-optional with `geo_id`.",
+                "title": "City Name"
+              },
+              "free_cancellation": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: keep only offers whose cheapest rate advertises free cancellation. Sent via `popular_filters`; treat as best-effort upstream — verify with `best_offer.free_cancellation` per row.",
+                "title": "Free Cancellation"
+              },
+              "geo_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Tutu hotel city geo_id (e.g. '2657260' for Moscow, '2656873' for Казань). Skip the city_name lookup if provided. WARNING: only pass an id obtained from a previous `search_hotels` response (`meta.geo_id` or `meta.resolved_geo.geo_id`). Do NOT reuse geo_ids from transport tools (`search_avia` / `search_rail` / `search_bus` / `search_etrain`) — for some cities those resolve to an AIRPORT/STATION entry that has zero hotels in Tutu's hotel catalog.",
+                "title": "Geo Id"
+              },
+              "hotel_amenities": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: property-level amenities. Aliases: `pool`, `parking`, `wifi`, `spa`, `transfer`, `kid_friendly`, `pet_friendly`, `kitchen`, `fitness`, `sauna`, `jacuzzi`, `aquapark`, `kids_pool`, `beach`, `elevator`, `minibar`, `fridge`, `buffet`. Raw Tutu amenity ids (e.g. `'2005'`) are also accepted.",
+                "title": "Hotel Amenities"
+              },
+              "hotel_types": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: property types, e.g. ['hotel', 'apartments', 'hostel', 'aparthotel', 'guesthouse'].",
+                "title": "Hotel Types"
+              },
+              "meals": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: meal plans, e.g. ['breakfast', 'halfboard', 'allinclusive', 'fullboard', 'lunch', 'dinner', 'nomeal'].",
+                "title": "Meals"
+              },
+              "min_rating": {
+                "anyOf": [
+                  {
+                    "maximum": 10,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: minimum aggregated rating (0..10). Mapped to the nearest Tutu rating bucket (>0 / >7 / >8 / >9).",
+                "title": "Min Rating"
+              },
+              "page": {
+                "default": 1,
+                "description": "1-indexed page number.",
+                "maximum": 10,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 10,
+                "description": "Hotels per page.",
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Page Size",
+                "type": "integer"
+              },
+              "price_max": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: maximum price PER NIGHT (RUB). Sent to the upstream as a relevance signal, then enforced server-side as a hard cap on `best_offer.price.amount / stay.nights` — the offer price is a whole-stay total, so it's divided back to per-night before the comparison.",
+                "title": "Price Max"
+              },
+              "room_amenities": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: room-level amenities (best-effort at the listing upstream — the response carries one `best_offer`, so use `get_offer_details` for guaranteed per-room filtering). Aliases: `sea_view`, `mountain_view`, `view`, `balcony`, `air_conditioner`, `private_bath`, `room_wifi`, `room_kitchen`, `workspace`. Raw Tutu amenity ids (e.g. `'2014'`) are also accepted.",
+                "title": "Room Amenities"
+              },
+              "stars": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter: include only these star ratings (1..5, plus 0 for unrated). Multi-select.",
+                "title": "Stars"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level: `compact` (default) or `full`. `compact` keeps one cover photo per hotel; `full` keeps a small gallery (a handful of photos, not every one — `photos_total` records the real count, the rest live on the hotel page). Room categories, rate ladders and review texts come from `get_offer_details` regardless of `view`. Prefer `compact` for first-pass search — `full` only swaps in more photos, which an agent rarely needs and which can overflow client output caps.",
+                "enum": [
+                  "compact",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "title": "search_hotelsArguments",
+            "type": "object"
+          },
+          "name": "search_hotels",
+          "outputSchema": null,
+          "title": "Search hotels in a city (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Search Tutu air tickets between two cities or specific airports. `origin`/`destination` accept a city ('Москва'), an airport name ('Шереметьево') or a bare IATA code ('SVO', 'IST'). An airport input narrows the city-wide search to that airport: offers via the city's other airports are dropped (count in `meta.post_filter_dropped_wrong_airport`; the key is present only when the request named a specific airport), the endpoint gets `meta.from/to.kind=\"airport\"` and its `iata` becomes the airport's own code. A bare code means the airport, not the metro area ('IST' = Стамбул-Новый only, SAW dropped); pass the city name to cover all its airports. When every city flight uses other airports, `meta.airport_note` lists them with counts — relay it and offer a city-wide retry. Supports one-way and round-trip (`return_date`). Each offer carries: `price` (cheapest fare), `variants[]` (every fare family with its own `offer_hash` for checkout), `legs[].segments[]` (full itinerary with `voyage_no` flight numbers, including `review_summary` for the carrier when Tutu returns feedback), `search_results_url` (tutu.ru listing page — not a per-offer URL), and `checkout_ref` (pass verbatim to `create_checkout_link` to get a deeplink purchase URL for the exact ticket plus a search-results URL for browsing — show the deeplink when the user has chosen this specific flight. A Direct ROUND-TRIP offers are deeplinkable too: `checkout_ref` carries `is_round_trip` + `return_departure_at` — forward BOTH and the deeplink mints a cart with both legs. Connecting round-trips fall back to search because explicit/avia currently supports one flight per direction; omitting `return_departure_at` also falls back to search. `checkout_ref` also carries `passengers_full/child/infant` from the search so the cart can request the same party — forward them, else the cart opens with one adult. An offer flagged `is_multi_pnr` (one-way OR round-trip) means separate tickets / self-transfer — relay its `multi_pnr_note`). For a presentation card, pass the selected compact offer object as `details_ref` to `get_offer_details(product_type='avia', ...)`; there is no separate read-only avia detail endpoint. Paginated (`page`+`page_size`, see `meta.has_more`); sortable by price / duration / departure time. Filterable server-side: `direct_only` (nonstop only) and `carriers` (by airline). `meta.carriers_available` is the per-route airline reference (`name` + `offers_count` + `price_from`, derived from the fetched route pool; a stable `id` is added only when Tutu ships its carrier facet) — filter by echoing a `name` from it rather than guessing spelling. Both filter counts surface in `meta.post_filter_dropped_not_direct` / `_wrong_carrier`. With a filter active the whole route pool is fetched before filtering, so a carrier listed in `carriers_available` reliably appears and `has_more` stays honest; `meta.total_matched` is the exact count after filters, before pagination (`meta.total_matched_exact=false` only on a rare >200-offer route, where it is a lower bound). Grounding: every claim about baggage, cabin baggage, refund, change, seat selection, fare family or carrier rating must be traceable to `variants[].conditions` or `review_summary` in this response. If a field is null/absent, say so explicitly — never fall back to general knowledge of the carrier or to web search. Airport disambiguation is mandatory: each `legs[].segments[].to` is a self-describing string `\"City — Name (IATA), терм. T\"` (e.g. `\"Стамбул — Сабиха Гёкчен (SAW)\"`) — surface the airport name and terminal verbatim, and call out when two offers in the same list use different airports of the same city (SAW vs IST for Стамбул, SVO / DME / VKO / ZIA for Москва) with a one-line note on distance / side. When the upstream omitted the name the string falls back to `\"City, IATA\"`; then IATA → airport-name is acceptable common knowledge (stable global registry). For airport disambiguation and checkout details call `get_avia_instructions`.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "default": 1,
+                "description": "Adult passengers (12+ years).",
+                "maximum": 9,
+                "minimum": 1,
+                "title": "Adults",
+                "type": "integer"
+              },
+              "carriers": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Keep only offers by these airlines. Pass a `name` from `meta.carriers_available` (e.g. 'Аэрофлот'); an `id` also works when that entry carries one. Do NOT guess spelling: 'aeroflot' will not match 'Аэрофлот'. Case-insensitive substring on the display name; all carriers on a multi-carrier offer must match one of the requested values. An empty list is a no-op. Dropped count in `meta.post_filter_dropped_wrong_carrier`.",
+                "title": "Carriers"
+              },
+              "children": {
+                "default": 0,
+                "description": "Children (2..11 years).",
+                "maximum": 9,
+                "minimum": 0,
+                "title": "Children",
+                "type": "integer"
+              },
+              "departure_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Outbound departure date, YYYY-MM-DD.",
+                "title": "Departure Date"
+              },
+              "destination": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Destination city or a specific airport by name/IATA code ('Шереметьево', 'SVO') — an airport narrows results to it. `to_city` is accepted as a backward-compatible alias.",
+                "title": "Destination"
+              },
+              "direct_only": {
+                "default": false,
+                "description": "Keep only nonstop flights (every leg a single segment; correct for round-trip). Client-side post-filter; dropped count in `meta.post_filter_dropped_not_direct`.",
+                "title": "Direct Only",
+                "type": "boolean"
+              },
+              "from_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `origin`.",
+                "title": "From City"
+              },
+              "infants": {
+                "default": 0,
+                "description": "Infants (0..1 years).",
+                "maximum": 9,
+                "minimum": 0,
+                "title": "Infants",
+                "type": "integer"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Origin city (e.g. 'Москва', 'Moscow', 'Сочи') or a specific airport by name/IATA code ('Внуково', 'VKO') — an airport narrows results to it. Resolved via Tutu suggest. `from_city` is accepted as a backward-compatible alias.",
+                "title": "Origin"
+              },
+              "page": {
+                "default": 1,
+                "description": "1-indexed page number. Each page carries up to `page_size` offers. Check `meta.has_more` to know if another page exists.",
+                "maximum": 10,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 10,
+                "description": "Offers per page (1..30). Default 10.",
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Page Size",
+                "type": "integer"
+              },
+              "price_max": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Hard cap on price per offer (RUB). Enforced server-side.",
+                "title": "Price Max"
+              },
+              "return_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional return date, YYYY-MM-DD. When set, the tool asks upstream for a round-trip package and returns offers with both legs (`legs[0]=outbound`, `legs[1]=return`). Crucial for long-haul international routes — some city pairs (e.g. Tokyo→Moscow far-future) are sold only as round-trip and return 0 offers as one-way.",
+                "title": "Return Date"
+              },
+              "service_class": {
+                "default": "Y",
+                "description": "IATA service class: Y=economy, S=premium economy, C=business, F=first.",
+                "title": "Service Class",
+                "type": "string"
+              },
+              "sort": {
+                "default": "price_asc",
+                "description": "Ordering applied before pagination. `price_asc` (cheapest first), `price_desc`, `duration_asc` (shortest first), `departure_asc` (earliest departure).",
+                "enum": [
+                  "price_asc",
+                  "price_desc",
+                  "duration_asc",
+                  "departure_asc"
+                ],
+                "title": "Sort",
+                "type": "string"
+              },
+              "to_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `destination`.",
+                "title": "To City"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level: `compact` (default) or `full`. `compact` returns lean decision cards — rail collapses the long per-class fare list to a `fares` summary {count, price_from, price_to, currency, refundable_count?, changeable_count?} (the full per-class breakdown and car classes come from `get_offer_details`; per-variant `conditions: {refundable, changeable}` come with `view='full'`), and rail/bus drop the per-segment rating that duplicates the offer-level one. Avia and etrain are left unchanged — neither has a read-only detail endpoint to recover dropped fares/ratings from. `full` inlines every fare variant and per-segment review_summary. Prefer `compact` for first-pass search; pass `full` only when the user needs the whole fare breakdown inline for several offers at once.",
+                "enum": [
+                  "compact",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "title": "search_aviaArguments",
+            "type": "object"
+          },
+          "name": "search_avia",
+          "outputSchema": null,
+          "title": "Search air tickets (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Search Russian Railways (РЖД) tickets between two cities. Returns the real departure & arrival station names per offer (useful when a city has several stations — Москва has Курский / Ленинградский / Казанский). Each offer carries: `price`, a `fares` summary in the default `compact` view (`{count, price_from, price_to, currency, refundable_count?, changeable_count?}` — the counts say how many fare variants are refundable / exchangeable; the per-class ladder купе / плацкарт / СВ with names + amenities comes from `get_offer_details`, or pass `view='full'` to inline the full `variants[]`, each with `conditions: {refundable, changeable}` so you can tell WHICH price is the refundable one), `legs[].segments[]` with carrier + train number + train brand (`vehicle_meta`: `name` like «Ласточка» / «Сапсан» when branded, plus `is_premium` / `is_double_decker` when true — an unbranded двухэтажный still carries the flag with no `name`; omitted only for a plain train) + `review_summary` when Tutu has train feedback, `search_results_url` (tutu.ru listing page), `checkout_url` (seat-selection URL on tutu.ru/poezda/order/), and `checkout_ref` for rebuilding the link if needed. `details_ref` can be passed to `get_offer_details(product_type='rail', ...)` to load `service_classes[]` (one card per class: description, structured `amenities[]` codes like WIFI / AIR_CONDITIONING / BIO_TOILET with Russian labels, rating, photos), lean fare rows in `variants[]` (join to the class card via `class_index`), `cars[]`, and a `train_vehicle` block (name, is_premium, is_firm, is_double_decker, has_photo, has_tour_3d) plus a `ticket` block. For amenity-code localization see `tutu://amenities/dictionary`. This search alone does NOT answer female/male/mixed compartment, exact-seat, nearby-seat, lower/upper or WC-distance questions — for those, the next step is `get_rail_seatmap(details_ref=offer.details_ref)` on the chosen offer (use its `task=` modes for gender/far-from-WC). Paginated + sortable. Grounding: car types, seat counts, double-decker presence and train ratings must come from this response or from `get_offer_details` — never invent 'обычно бывают плацкарт / купе / СВ' or substitute web facts when the field is missing. See `get_rail_instructions`.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "carriers": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Keep only offers by these carriers (e.g. 'ФПК'). Pass a `name` from `meta.carriers_available` (the operators present in this result set); case-insensitive substring, an empty list is a no-op. All carriers on a multi-carrier offer must match one of the requested values. Dropped count in `meta.post_filter_dropped_wrong_carrier`.",
+                "title": "Carriers"
+              },
+              "departure_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Departure date, YYYY-MM-DD.",
+                "title": "Departure Date"
+              },
+              "destination": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Destination city or station name. `to_city` is accepted as a backward-compatible alias.",
+                "title": "Destination"
+              },
+              "direct_only": {
+                "default": false,
+                "description": "Keep only direct trains (no transfers — every leg a single segment). Dropped count in `meta.post_filter_dropped_not_direct`.",
+                "title": "Direct Only",
+                "type": "boolean"
+              },
+              "from_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `origin`.",
+                "title": "From City"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Origin city or station name. `from_city` is accepted as a backward-compatible alias.",
+                "title": "Origin"
+              },
+              "page": {
+                "default": 1,
+                "description": "1-indexed page number.",
+                "maximum": 10,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 10,
+                "description": "Offers per page.",
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Page Size",
+                "type": "integer"
+              },
+              "passengers": {
+                "default": 1,
+                "description": "Number of adult passengers.",
+                "maximum": 6,
+                "minimum": 1,
+                "title": "Passengers",
+                "type": "integer"
+              },
+              "price_max": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Hard cap on price per offer (RUB). Enforced server-side.",
+                "title": "Price Max"
+              },
+              "sort": {
+                "default": "price_asc",
+                "description": "Ordering applied before pagination.",
+                "enum": [
+                  "price_asc",
+                  "price_desc",
+                  "duration_asc",
+                  "departure_asc"
+                ],
+                "title": "Sort",
+                "type": "string"
+              },
+              "to_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `destination`.",
+                "title": "To City"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level: `compact` (default) or `full`. `compact` returns lean decision cards — rail collapses the long per-class fare list to a `fares` summary {count, price_from, price_to, currency, refundable_count?, changeable_count?} (the full per-class breakdown and car classes come from `get_offer_details`; per-variant `conditions: {refundable, changeable}` come with `view='full'`), and rail/bus drop the per-segment rating that duplicates the offer-level one. Avia and etrain are left unchanged — neither has a read-only detail endpoint to recover dropped fares/ratings from. `full` inlines every fare variant and per-segment review_summary. Prefer `compact` for first-pass search; pass `full` only when the user needs the whole fare breakdown inline for several offers at once.",
+                "enum": [
+                  "compact",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "title": "search_railArguments",
+            "type": "object"
+          },
+          "name": "search_rail",
+          "outputSchema": null,
+          "title": "Search railway tickets (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Search Tutu intercity bus tickets between two cities. Each offer carries: `price`, `variants[]` (where the carrier offers several tariffs), `legs[].segments[]` with stop names and carrier ratings in `review_summary` when Tutu returns feedback, `search_results_url` (tutu.ru listing), and `checkout_url` (Tutu `explicit/bus` deeplink to this offer's seat-selection page). Prices cover the WHOLE searched party (`adults` + `children`), and `checkout_ref` carries that composition (`passengers` total + `passengers_adult` / `passengers_child`) — forward it verbatim so registration books the same party. `checkout_ref` can rebuild the link, especially for a non-cheapest tariff. `details_ref` can be passed to `get_offer_details(product_type='bus', ...)` to load stops, carrier, structured `amenities[]` (wifi / air_conditioning / power_outlet / toilet flags as machine-readable codes), `ticket` (eticket flag + accepted documents), `refund.blocks[]` / `luggage.blocks[]` and `seat_selection` (free_count, available_seat_ids, has_scheme). Use `available_seat_ids` as `seat_numbers` only after the user asks you to choose/preselect seats; if it is empty while `free_count` is positive, exact-seat preselection is unavailable in this response, not 'no seats'. For amenity code → label localization see `tutu://amenities/dictionary`. Paginated + sortable. Grounding: stop names, luggage rules and carrier facts must come from this response or `get_offer_details` — never show raw stop ids as the only stop description and never invent luggage / boarding rules when the field is missing. See `get_bus_instructions`.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "default": 1,
+                "description": "Number of adult passengers.",
+                "maximum": 8,
+                "minimum": 1,
+                "title": "Adults",
+                "type": "integer"
+              },
+              "carriers": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Keep only offers by these carriers (e.g. 'Ecolines'). Pass a `name` from `meta.carriers_available` (the operators present in this result set); case-insensitive substring, an empty list is a no-op. All carriers on a multi-carrier offer must match one of the requested values. Dropped count in `meta.post_filter_dropped_wrong_carrier`.",
+                "title": "Carriers"
+              },
+              "children": {
+                "default": 0,
+                "description": "Number of children travelling on a child fare (each occupies a seat; the age limit and any discount are carrier-specific — never promise a discount the price doesn't show). Offer prices cover the WHOLE searched party (adults + children), max 8 seats total.",
+                "maximum": 7,
+                "minimum": 0,
+                "title": "Children",
+                "type": "integer"
+              },
+              "departure_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Departure date, YYYY-MM-DD.",
+                "title": "Departure Date"
+              },
+              "destination": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Destination city. `to_city` is accepted as a backward-compatible alias.",
+                "title": "Destination"
+              },
+              "direct_only": {
+                "default": false,
+                "description": "Keep only direct buses (no transfers — every leg a single segment). Dropped count in `meta.post_filter_dropped_not_direct`.",
+                "title": "Direct Only",
+                "type": "boolean"
+              },
+              "from_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `origin`.",
+                "title": "From City"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Origin city. `from_city` is accepted as a backward-compatible alias.",
+                "title": "Origin"
+              },
+              "page": {
+                "default": 1,
+                "description": "1-indexed page number.",
+                "maximum": 10,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 10,
+                "description": "Offers per page.",
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Page Size",
+                "type": "integer"
+              },
+              "price_max": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Hard cap on price per offer (RUB). Enforced server-side.",
+                "title": "Price Max"
+              },
+              "sort": {
+                "default": "price_asc",
+                "description": "Ordering applied before pagination.",
+                "enum": [
+                  "price_asc",
+                  "price_desc",
+                  "duration_asc",
+                  "departure_asc"
+                ],
+                "title": "Sort",
+                "type": "string"
+              },
+              "to_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `destination`.",
+                "title": "To City"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level: `compact` (default) or `full`. `compact` returns lean decision cards — rail collapses the long per-class fare list to a `fares` summary {count, price_from, price_to, currency, refundable_count?, changeable_count?} (the full per-class breakdown and car classes come from `get_offer_details`; per-variant `conditions: {refundable, changeable}` come with `view='full'`), and rail/bus drop the per-segment rating that duplicates the offer-level one. Avia and etrain are left unchanged — neither has a read-only detail endpoint to recover dropped fares/ratings from. `full` inlines every fare variant and per-segment review_summary. Prefer `compact` for first-pass search; pass `full` only when the user needs the whole fare breakdown inline for several offers at once.",
+                "enum": [
+                  "compact",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "title": "search_busArguments",
+            "type": "object"
+          },
+          "name": "search_bus",
+          "outputSchema": null,
+          "title": "Search bus tickets (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Search Tutu suburban / commuter trains (электрички) between two cities. Useful for short routes around Москва / СПб / regional centres. Each offer carries the same shape as `search_rail`: `price`, `variants[]`, `legs[].segments[]`, `search_results_url`, `checkout_url` (tutu.ru commuter schedule page with `st1` / `st2` route ids), and `checkout_ref` for rebuilding the link if needed. Each segment carries `vehicle_meta` ({name: Ласточка/Дальний, code: swallow/distant, description}) when Tutu's dictionary provides it — use this to filter consist type without parsing labels. No separate read-only detail endpoint is confirmed for etrain; `get_offer_details(product_type='etrain', details_ref=<offer>)` reformats the selected search offer with a `ticket` block (eticket, by_passport) and surfaces `vehicle_type` in summary. Paginated + sortable. Grounding: schedule, stops and carrier facts must come from this response — do not substitute web lookups or general regional-rail knowledge when a field is missing. See `get_etrain_instructions`.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "carriers": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Keep only offers by these carriers. Accepted for parity; commuter offers often carry no named carrier, so this frequently drops everything or nothing — inspect `meta.carriers_available` first. Case-insensitive substring; empty list is a no-op. All carriers on a multi-carrier offer must match one of the requested values. Dropped count in `meta.post_filter_dropped_wrong_carrier`.",
+                "title": "Carriers"
+              },
+              "departure_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Departure date, YYYY-MM-DD.",
+                "title": "Departure Date"
+              },
+              "destination": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Destination city or station name. `to_city` is accepted as a backward-compatible alias.",
+                "title": "Destination"
+              },
+              "direct_only": {
+                "default": false,
+                "description": "Keep only single-segment commuter offers. Accepted for interface parity with the other transports; on etrain it is nearly always a no-op (commuter offers are single-segment). Dropped count in `meta.post_filter_dropped_not_direct`.",
+                "title": "Direct Only",
+                "type": "boolean"
+              },
+              "from_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `origin`.",
+                "title": "From City"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Origin city or station name. `from_city` is accepted as a backward-compatible alias.",
+                "title": "Origin"
+              },
+              "page": {
+                "default": 1,
+                "description": "1-indexed page number.",
+                "maximum": 10,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 10,
+                "description": "Offers per page.",
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Page Size",
+                "type": "integer"
+              },
+              "price_max": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Hard cap on price per offer (RUB). Enforced server-side.",
+                "title": "Price Max"
+              },
+              "sort": {
+                "default": "price_asc",
+                "description": "Ordering applied before pagination.",
+                "enum": [
+                  "price_asc",
+                  "price_desc",
+                  "duration_asc",
+                  "departure_asc"
+                ],
+                "title": "Sort",
+                "type": "string"
+              },
+              "to_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `destination`.",
+                "title": "To City"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level: `compact` (default) or `full`. `compact` returns lean decision cards — rail collapses the long per-class fare list to a `fares` summary {count, price_from, price_to, currency, refundable_count?, changeable_count?} (the full per-class breakdown and car classes come from `get_offer_details`; per-variant `conditions: {refundable, changeable}` come with `view='full'`), and rail/bus drop the per-segment rating that duplicates the offer-level one. Avia and etrain are left unchanged — neither has a read-only detail endpoint to recover dropped fares/ratings from. `full` inlines every fare variant and per-segment review_summary. Prefer `compact` for first-pass search; pass `full` only when the user needs the whole fare breakdown inline for several offers at once.",
+                "enum": [
+                  "compact",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "title": "search_etrainArguments",
+            "type": "object"
+          },
+          "name": "search_etrain",
+          "outputSchema": null,
+          "title": "Search commuter trains (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "One-call multimodal 'how to get there' — runs avia + railway + bus + etrain in parallel and returns a unified sorted list under `variants[]`. Each entry has the same shape as a single-mode `search_*` offer in the default `compact` view: `price`, `legs[].segments[]`, `search_results_url`, optional `checkout_url`, `checkout_ref`, and `details_ref` for rail/bus where available. Fare families are nested but mode-dependent (same contract as the single-mode tools): avia/bus/etrain entries carry a per-fare `variants[]` (each with its own `offer_hash`); RAIL entries instead carry a `fares` summary `{count, price_from, price_to}` — there is NO rail `variants[]`/`offer_hash` to read or override; get the per-class ladder from `get_offer_details(product_type='rail')` (or re-run with `view='full'`). Use `optimize_for='price'|'time'` to rank per mode. Use `checkout_url` directly when present; otherwise pass `checkout_ref` to `create_checkout_link`. Soft-fails per mode: if one upstream is down, that mode appears in `meta.unavailable[]` and the rest of the result is still usable.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "default": 1,
+                "description": "Number of adult passengers. Multitransport searches ADULTS ONLY — for a party with children run the concrete mode's search instead (`search_avia` / `search_bus` take `children`), so offers are priced for the real party.",
+                "maximum": 6,
+                "minimum": 1,
+                "title": "Adults",
+                "type": "integer"
+              },
+              "carriers": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Keep only offers by these carriers in every mode. Case-insensitive substring on carrier display names (pass values echoed from a per-mode search's `meta.carriers_available`); an empty list is a no-op. All carriers on a multi-carrier offer must match one of the requested values. Applied per-mode, like `price_max`.",
+                "title": "Carriers"
+              },
+              "departure_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Departure date, YYYY-MM-DD.",
+                "title": "Departure Date"
+              },
+              "destination": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Destination city. Pass a CITY here — a specific airport (name/IATA code) only makes sense for the avia mode; use `search_avia` for that. `to_city` is accepted as a backward-compatible alias.",
+                "title": "Destination"
+              },
+              "direct_only": {
+                "default": false,
+                "description": "Keep only direct offers (no transfers) in every mode. Applied per-mode, like `price_max`.",
+                "title": "Direct Only",
+                "type": "boolean"
+              },
+              "from_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `origin`.",
+                "title": "From City"
+              },
+              "modes": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "enum": [
+                        "avia",
+                        "railway",
+                        "bus",
+                        "etrain"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Subset of modes to include. Default: all four.",
+                "title": "Modes"
+              },
+              "optimize_for": {
+                "default": "price",
+                "description": "Sort variants by total price (default) or by total trip duration.",
+                "enum": [
+                  "price",
+                  "time"
+                ],
+                "title": "Optimize For",
+                "type": "string"
+              },
+              "origin": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Origin city. Pass a CITY here — a specific airport (name/IATA code) only makes sense for the avia mode; use `search_avia` for that. `from_city` is accepted as a backward-compatible alias.",
+                "title": "Origin"
+              },
+              "page": {
+                "default": 1,
+                "description": "1-indexed page number.",
+                "maximum": 10,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 10,
+                "description": "Variants per page after merging across modes.",
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Page Size",
+                "type": "integer"
+              },
+              "price_max": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Hard cap on price per variant (RUB). Applied to every mode independently.",
+                "title": "Price Max"
+              },
+              "to_city": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Deprecated alias for `destination`.",
+                "title": "To City"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level: `compact` (default) or `full`. `compact` returns lean decision cards — rail collapses the long per-class fare list to a `fares` summary {count, price_from, price_to, currency, refundable_count?, changeable_count?} (the full per-class breakdown and car classes come from `get_offer_details`; per-variant `conditions: {refundable, changeable}` come with `view='full'`), and rail/bus drop the per-segment rating that duplicates the offer-level one. Avia and etrain are left unchanged — neither has a read-only detail endpoint to recover dropped fares/ratings from. `full` inlines every fare variant and per-segment review_summary. Prefer `compact` for first-pass search; pass `full` only when the user needs the whole fare breakdown inline for several offers at once.",
+                "enum": [
+                  "compact",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "title": "search_multitransportArguments",
+            "type": "object"
+          },
+          "name": "search_multitransport",
+          "outputSchema": null,
+          "title": "Compare all transport modes (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Fetch details for a single offer. Defaults to `view='compact'`: for hotels it caps photos, omits the per-rate `cancellation_policy` text (the `free_cancellation` / `free_cancellation_until` flags stay), omits room `amenity_groups` (flat `room_amenities` stays) and omits review TEXTS — the `review_summary` aggregate stays. Use `view='rules'` for the exact cancellation ladder, `view='reviews'` + `review_limit` for a feedback-only card (review texts with pagination; rooms collapse to stubs), or `view='full'` for everything. Transport details ignore `view`. `product_type=hotels` returns hotel info (name, address, photos, hotel-level amenities, rules, `review_summary`) plus `rooms[]` — every room category Tutu sells, each with: `room_name`, `room_description`, `photos`, `bed_summary` + `bed_type` (single/twin/double), `view` (sea/water/mountain/park/city/river/lake/yard/other when Tutu wrote it into the room name), `room_size_sqm` (room area in m² when Tutu exposes it, often a minimum 'от N'; usually `null` here — the detail upstream rarely carries area, the listing `best_offer.room_size_sqm` is the more reliable source — so say 'площадь не указана', don't guess) and `max_occupancy` (None when Tutu doesn't provide it), `amenity_groups` grouped by Спальня/Ванная/Техника, flat `room_amenities`, structured `room_property_items`, and `rates[]`. Each rate carries `price` (the WHOLE-STAY total for the requested dates and guests, tagged `price_basis=\"stay_total\"` — render as-is, NEVER multiply by nights; the top-level `stay {check_in, check_out, nights}` block carries the night count), `meal {included, name, type}`, `breakfast_included`, `refundable`, `free_cancellation` + `free_cancellation_until`, full `cancellation_policy[]`, `pay_at_hotel`, `pay_online`, raw `highlights[]`, and `offerpack_hash`. When `rooms` is empty AND `notices[]` carries `kind=no_room_offers_for_dates`, this is Tutu's encoding of 'provider has no inventory on these dates' (often transient — same hotel+dates can return rooms within the hour). Surface `notices[].agent_hint` to the user as the explanation, do not treat it as a tool error; the hotel's static info (name, address, photos, amenities, rating, reviews) is still populated. `product_type=rail` uses `offer.details_ref` from search_rail to load `service_classes[]` — one card per class (купе/плацкарт/СВ code in `service_class`, `description`, `services`, `amenities[]` with codes + Russian labels, per-class `review_summary`, `photos`) — plus lean fare rows in `variants[]` ({offer_hash, price, fare_type REFUNDABLE/NON_REFUNDABLE, service_class, class_index, car_type, car_number, seat_type, seats_count}; `class_index` points into `service_classes[]` — join by it, not by the display name), `cars[]` (per-car availability — sum `cars[].seats_count` for the train's free-seat total; do NOT sum `variants[].seats_count`, fare rows share seat groups so summing them double-counts), `train_vehicle` (name, is_premium / is_firm / is_double_decker, has_photo, has_tour_3d) and a `ticket` block (format=eticket, boarding=by_passport). `product_type=bus` uses `offer.details_ref` from search_bus to load structured `amenities[]` (Wi-Fi / power_outlet / air_conditioning / toilet flags), `bus_category` (model + service class), `ticket` (eticket flag + documents_accepted), `refund.blocks[]` and `luggage.blocks[]` with structured rule text, plus `seat_selection` (required, free_count, available_seat_ids, has_scheme). For bus straight-to-cart, pick `seat_numbers` only from `available_seat_ids`; if that list is empty or missing but `free_count` is positive, say that exact-seat preselection is unavailable in this response, NOT that there are no seats. `product_type=etrain` returns the search-envelope fallback with `summary.vehicle_type` (Ласточка vs Дальний with description) and a `ticket` block. `product_type=avia` can format a selected search offer passed as `details_ref`; the richer avia order endpoint is not called here because it creates a draft order. For amenity-code localization see `tutu://amenities/dictionary`.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "default": 2,
+                "description": "Number of adult guests.",
+                "maximum": 6,
+                "minimum": 1,
+                "title": "Adults",
+                "type": "integer"
+              },
+              "check_in": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Required for `hotels`. YYYY-MM-DD.",
+                "title": "Check In"
+              },
+              "check_out": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Required for `hotels`. YYYY-MM-DD.",
+                "title": "Check Out"
+              },
+              "children_ages": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Ages of accompanying children.",
+                "title": "Children Ages"
+              },
+              "details_ref": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail` and `bus`: pass `offer.details_ref` from the corresponding search result verbatim. For `avia`/`etrain`: pass the selected compact offer object if you want a presentation-ready reformat without side effects.",
+                "title": "Details Ref"
+              },
+              "offer_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "REQUIRED for `hotels`: Tutu hotel id (`hotel.hotel_id` / `hotel.hotel_geo_id` from search_hotels, the numeric id used in details URLs; `tutu_offer_id` UUID is not accepted by Tutu details endpoints). Optional for transport — `details_ref` alone is enough.",
+                "title": "Offer Id"
+              },
+              "product_type": {
+                "description": "Type of offer to inspect. Only `hotels` has text reviews; rail/bus have read-only detail endpoints.",
+                "enum": [
+                  "hotels",
+                  "avia",
+                  "rail",
+                  "railway",
+                  "bus",
+                  "etrain"
+                ],
+                "title": "Product Type",
+                "type": "string"
+              },
+              "review_limit": {
+                "default": 5,
+                "description": "For `hotels`: number of review texts to return in `view='reviews'` / `view='full'`. Default 5, max 50; page with `review_offset`. Ignored by `compact`/`rules` — those views carry only `review_summary` and skip the review fetch entirely.",
+                "maximum": 50,
+                "minimum": 0,
+                "title": "Review Limit",
+                "type": "integer"
+              },
+              "review_offset": {
+                "default": 0,
+                "description": "For `hotels`: review pagination offset. Use `hotel.reviews.pagination.has_more` to fetch next page.",
+                "minimum": 0,
+                "title": "Review Offset",
+                "type": "integer"
+              },
+              "review_order": {
+                "default": "desc",
+                "description": "For `hotels`: review sort order.",
+                "enum": [
+                  "desc",
+                  "asc"
+                ],
+                "title": "Review Order",
+                "type": "string"
+              },
+              "review_sort": {
+                "default": "postedAt",
+                "description": "For `hotels`: sort review texts by date or rating.",
+                "enum": [
+                  "postedAt",
+                  "rating"
+                ],
+                "title": "Review Sort",
+                "type": "string"
+              },
+              "review_topics": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: optional topic filter from `hotel.reviews.topics`. Empty/None = all topics.",
+                "title": "Review Topics"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level. Hotel detail scope: `compact` (default) / `rules` / `reviews` / `full`. `compact` is the lean decision card: room photos capped, per-rate `cancellation_policy` text dropped (the decision facts stay in `free_cancellation` + `free_cancellation_until`), room `amenity_groups` dropped (flat `room_amenities` kept), hotel photos capped, hotel `amenity_groups` slimmed to names, and review TEXTS omitted — the `review_summary` aggregate (rating + aspects) stays; for guest quotes call `view='reviews'`. `rules` = compact + the full cancellation ladder. `reviews` is a feedback-only card: hotel identity + `review_summary` + `reviews[]` texts (set `review_limit`), rooms collapse to name + cheapest-price stubs, no photos/amenities/policy. `full` returns every block (photo arrays still bounded to a small gallery). Transport details ignore `view`.",
+                "enum": [
+                  "compact",
+                  "rules",
+                  "reviews",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "required": [
+              "product_type"
+            ],
+            "title": "get_offer_detailsArguments",
+            "type": "object"
+          },
+          "name": "get_offer_details",
+          "outputSchema": null,
+          "title": "Get offer details (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Read-only per-car seat layout for a selected rail offer. Authoritative next step after `search_rail` for ANY question about exact seats, car layout, female/male/mixed compartments, lower/upper or nearby seats, or WC distance: if a rail offer has `details_ref`, CALL this — never tell the user the seat map is unavailable without calling, and read `seatmap_status` to tell a real layout (`ok`) from `no_layout_for_carrier`. Top-level `seatmap_status`: `\"ok\"` when Tutu returned a schema, `\"no_layout_for_carrier\"` when the carrier doesn't expose one (commonly non-РЖД commercial brands). In the fallback case `cars=[]` and an `agent_hint` field spells out that this is NOT 'no seats' — just 'no schema'. On success, `cars[]` carries every car of the train: `{car_number, car_type, service_class, amenities[], seat_groups[], seats[], hints, canvas}`. Each seat has `number`, `type` (LOWER / UPPER / SIDE_LOWER / SIDE_UPPER / SEDENTARY), `compartment_number`, `deck` (`None` unless double-decker), `gender`, `position{x,y}`, `size{width,height}`, plus precomputed `distance_to_nearest_wc_px` (Euclidean, server-side) so the agent quotes a ready number instead of doing geometry. The default `view='compact'` omits the raw geometry (`position`, `size`, `nearest_wc_rect`); pass `view='full'` to draw the car. For a pointed question prefer `task=` over paging the whole map: `far_from_wc` / `female` / `summary` return a short ranked answer across the WHOLE train (best seats + why), not every seat. Each seat also carries `group_index` — join key into `cars[].seat_groups[]`, where `service_class` and the fare data live. Use `group_index` (NOT `seat.type`) for the join: two groups in one car CAN share a `type` with different service classes, so type alone would route the agent at the wrong fare. Moving the fare/class off the seat saves ~70 B per seat and keeps the wire under the 64 KB cap. Fares: `seat_groups[].fares[]` lists EVERY fare type of the group (one entry per `fare_type`, e.g. REFUNDABLE vs NON_REFUNDABLE; a missing upstream type is keyed `\"UNKNOWN\"`), cheapest-first. Each entry is `{fare_type, price, child_price?}`: `price` is the ADULT fare, `child_price` (when present) the CHILD fare of the same type — compare refundable vs non-refundable AND adult vs child from here, no checkout needed. PRICING CAVEAT (read `pricing_note`): these are pre-cart totals and run BELOW the final cart price — checkout applies Tutu's own larger service fee (observed +6–8%), while the `search_rail` listing price DOES match the cart. Use seatmap prices for fare-type/seat comparison; quote the bookable total from the search listing or say the final price appears in the cart. `cheapest_fare` equals `fares[0]` (kept for compatibility). A rare `discounted: true` on an entry means upstream returned only discounted prices for that fare type — do not present it as the standard adult fare. Top-level `passenger_requirements` carries the age rules per passenger type (e.g. CHILD max_age 10; BABY max_age 5 with `needs_ticket=true, chargeable=false` — an infant still needs a free ticket): caveat child fares with them; exact applicability is confirmed on Tutu checkout, and the passenger composition itself is entered by the user on the opened Tutu page / in the cart (the rail deeplink prefills seats, not the composition). Gender coupe policy is dynamic: read `seat_groups[].is_gender` and `seats[].gender` from the current response. Treat only `gender=\"FEMALE\"` as a female seat and only `gender=\"MALE\"` as a male seat; `MIXED`, `NO_GENDER` and `UNDEFINED` are not proof of a female/male compartment. Do not hardcode a compartment number as gendered because the policy can change as seats are sold. Final gender choice is confirmed on Tutu checkout; this tool is read-only. `cars[].hints` still exposes the (x,y,w,h) of WC, conductor, cooler, garbage icons if the agent needs the raw geometry. `cars[].canvas.svg_url` is a CDN vagon outline — useful as an illustration ONLY; the SVG has no `<text>` seat numbers. Pagination: defaults are `max_cars=5` × `max_seats_per_car=40`, which keeps a typical 9-car train under the 64 KB MCP transport cap. Cars beyond the cap are kept in `cars[]` as `seats=[]` skeletons with `seats_omitted_for_pagination=true` — so the agent SEES the full train shape, doesn't have to remember `meta.total_cars`. `meta` carries `total_cars`, `returned_cars`, `cars_with_full_seats`, `has_more_cars`, `cars_with_more_seats` and a dynamic `pagination_hint` with concrete numbers. To load every seat of one car, call again with `car_number=<id>`. Grounding: do not invent window/aisle flags — upstream doesn't return them. Amenities are per-wagon, not per-seat. Sold/held seats are omitted by the upstream and so are absent from `seats[]`. Checkout handoff: once the user confirms specific seats, pass the choice to `create_checkout_link` (`car_number` + `seat_numbers`, plus `fare_type`/`gender_type` when chosen) together with the offer's `checkout_ref` — the returned link mints the cart with those exact seats pre-selected.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "car_number": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Load all seats of a single car (no per-car cap). Use after a default-paginated call when the agent needs every seat in a specific car for fine-grained preference matching. Match value comes from `cars[].car_number` in a prior response. Also scopes a `task=` query to that one car.",
+                "title": "Car Number"
+              },
+              "details_ref": {
+                "additionalProperties": true,
+                "description": "Pass `offer.details_ref` from `search_rail` verbatim. Required keys: `departure_station_code`, `arrival_station_code`, `departure_at`, `train_number`.",
+                "title": "Details Ref",
+                "type": "object"
+              },
+              "max_cars": {
+                "default": 5,
+                "description": "How many cars come back with full seats. Cars beyond this cap still appear in `cars[]` as skeletons (`seats=[]` + `seats_omitted_for_pagination=true`) so the agent sees the full train shape. Default 5 keeps the payload under the 64 KB MCP transport cap. Do NOT bump this on the first call to 'see everything' — call again with `car_number=<id>` for any specific car instead. Ignored when `car_number` is set.",
+                "maximum": 20,
+                "minimum": 1,
+                "title": "Max Cars",
+                "type": "integer"
+              },
+              "max_seats_per_car": {
+                "default": 40,
+                "description": "Cap on seats inside each returned car (ignored when `car_number` is set). When the cap kicks in, that car gets `seats_omitted_for_pagination=true` and shows up in `meta.cars_with_more_seats` — call again with `car_number=<id>` for the full list.",
+                "maximum": 120,
+                "minimum": 1,
+                "title": "Max Seats Per Car",
+                "type": "integer"
+              },
+              "task": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "far_from_wc",
+                      "female",
+                      "summary"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional focused query over the WHOLE train instead of the full per-car layout — returns a short ranked answer, not hundreds of seats: `far_from_wc` (farthest seats by `distance_to_nearest_wc_px`, ranked per berth type in `seats_by_type` so the best LOWER isn't hidden behind UPPER berths); `female` (seats currently `gender=\"FEMALE\"`, capped with a `total_female_seats` count + dynamic-policy caveat); `summary` (per-car available-seat counts by berth type, no seat list). Leave unset for the normal paginated seatmap. When set, `view` / `max_cars` are ignored; `car_number` optionally scopes the task to one car (e.g. `task='female', car_number='5'` to narrow a long female list).",
+                "title": "Task"
+              },
+              "view": {
+                "default": "compact",
+                "description": "Response detail level: `compact` (default) or `full`. `compact` drops the per-seat rendering geometry (`position`, `size`, `nearest_wc_rect`) that the agent never needs — decisions use the precomputed `distance_to_nearest_wc_px` and the seat attributes, both kept. `full` restores the raw geometry for clients that draw the car. Ignored when `task` is set.",
+                "enum": [
+                  "compact",
+                  "full"
+                ],
+                "title": "View",
+                "type": "string"
+              }
+            },
+            "required": [
+              "details_ref"
+            ],
+            "title": "get_rail_seatmapArguments",
+            "type": "object"
+          },
+          "name": "get_rail_seatmap",
+          "outputSchema": null,
+          "title": "Get rail seat map (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Detailed avia playbook: airport disambiguation, airport-scoped search (origin/destination by airport name or IATA code), deeplink vs search-results checkout, fare-family override, baggage/refund grounding. Read before working with `search_avia` results.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "title": "_get_instructionsArguments",
+            "type": "object"
+          },
+          "name": "get_avia_instructions",
+          "outputSchema": null,
+          "title": "Avia search & checkout playbook (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Detailed rail playbook: `get_rail_seatmap` workflow (pagination, seat types, group_index join, per-group fare variants, no-layout fallback), gender-coupe rules, `get_offer_details` and checkout (seat page vs straight-to-cart with chosen seats). Read before working with `search_rail` results.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "title": "_get_instructionsArguments",
+            "type": "object"
+          },
+          "name": "get_rail_instructions",
+          "outputSchema": null,
+          "title": "Rail search, seat map & checkout playbook (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Detailed bus playbook: passengers (adults + children, whole-party pricing, composition in `checkout_ref`), stop presentation, `get_offer_details` (amenities/refund/luggage/seat_selection), checkout (seat page vs straight-to-cart with chosen seats) and grounding. Read before working with `search_bus` results.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "title": "_get_instructionsArguments",
+            "type": "object"
+          },
+          "name": "get_bus_instructions",
+          "outputSchema": null,
+          "title": "Bus search & checkout playbook (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Detailed etrain (commuter) playbook: `vehicle_meta` consist type, `get_offer_details` reformat, checkout and grounding. Read before working with `search_etrain` results.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "title": "_get_instructionsArguments",
+            "type": "object"
+          },
+          "name": "get_etrain_instructions",
+          "outputSchema": null,
+          "title": "Commuter-train search & checkout playbook (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Detailed hotels playbook: hotels-vs-transport `geo_id` pitfall, clarifying questions, `best_offer` vs `get_offer_details`, view/bed/breakfast grounding. Read before working with `search_hotels` results.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "title": "_get_instructionsArguments",
+            "type": "object"
+          },
+          "name": "get_hotels_instructions",
+          "outputSchema": null,
+          "title": "Hotels search & details playbook (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Detailed multitransport playbook: nested `variants[]`, `optimize_for`, per-mode soft-fail, and how checkout defers to the per-mode playbooks. Read before working with `search_multitransport` results.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "title": "_get_instructionsArguments",
+            "type": "object"
+          },
+          "name": "get_multitransport_instructions",
+          "outputSchema": null,
+          "title": "Multitransport compare playbook (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "The single 'proceed to checkout' handle for a previously found offer. Pass the fields from the offer's `checkout_ref` object (emitted by every `search_hotels` / `search_avia` / `search_rail` / `search_bus` / `search_etrain` / `search_multitransport` result); the tool dispatches by `product_type` (or the `transport` alias). Returns `{checkout_url, kind, ...}`.\n\nEvery branch is a PURE URL builder — no network calls, no server-side cart, idempotent. The link is what the USER opens; their browser creates the cart in their own session. (We do NOT mint carts server-side: such a cart is session-bound and 404s for the user.)\n\nPer product (inputs from `checkout_ref`):\n- avia: returns BOTH `checkout_url` (a Tutu mtp-deeplink that 302-redirects to the ticket's purchase page — but ONLY if the user's browser already has a tutu session; a cold browser / Telegram in-app webview lands on the avia search for this route+date instead, where they pick the flight. Also falls back to search if the offer expired) and `search_results_url`. Present it as 'go book', not 'your cart is ready'. Inputs: `search_results_url`, `offer_hash`, `departure_geo_city_id`, `arrival_geo_city_id`, `departure_at`, `service_class`, plus `passengers_full` / `passengers_child` / `passengers_infant` (the searched party — forward them so the cart requests the SAME passengers; omit and the cart opens with one adult, so a multi-passenger total won't match — have the user confirm the count in the cart). Round-trip: also forward `is_round_trip` + `return_departure_at` from `checkout_ref` — a direct round-trip deeplink then carries BOTH legs in one cart. Connecting round-trips return `search_redirect`: `explicit/avia` currently supports one flight per direction. For a non-cheapest fare override `offer_hash` + `service_class` from the chosen `variants[i]` (keep forwarding `is_round_trip` + `return_departure_at`). Surface `checkout_url` once the user picked this flight; `search_results_url` while comparing.\n- rail: an `explicit/train` deeplink. TWO modes. (1) Seat page (default): inputs `departure_geo_point_id`, `arrival_geo_point_id`, `train_number`, `departure_at` (ISO) — the link opens the train's order page where the user picks seats. (2) Straight-to-cart (`kind=\"checkout_deeplink\"`): additionally pass the seat choice — `car_number` + `seat_numbers` (from `get_rail_seatmap`: `cars[].car_number`, `seats[].number`; one seat per passenger) plus `offer_hash` + `segment_hash` from `checkout_ref` — and the link mints the cart with those exact seats pre-selected (works in a cold browser; the cart belongs to whoever OPENS the link). Optional: `fare_type` (the chosen `fares[].fare_type` from the seatmap, e.g. REFUNDABLE), `gender_type` (for gender-policy coupes: MALE/FEMALE — ask the user; omit for regular cars), and `search_id`/`result_id`/`card_id` metadata from `checkout_ref`. Use straight-to-cart ONLY after the user explicitly confirmed specific seats; the cart skips the seat wizard, so a silently wrong seat would go unnoticed. Falls back to the tutu.ru/poezda/order page (needs `departure_city_id`, `arrival_city_id`, `departure_station_code`, `arrival_station_code`) if the deeplink can't be built.\n- bus: an `explicit/bus` deeplink. TWO modes, same idea. (1) Seat page (default): `offer_hash`, `departure_geo_city_id`, `arrival_geo_city_id`, `departure_at` (ISO). (2) Straight-to-cart: additionally `seat_numbers` (from `get_offer_details`'s `seat_selection.available_seat_ids`; one per passenger) + `search_id` + `departure_id`/`arrival_id` (all REQUIRED here — pass them through from `checkout_ref`). Falls back to the bus.tutu.ru/seats page (`departure_id`, `arrival_id`, `city_from`, `city_to`) otherwise.\n- etrain: tutu.ru schedule page from `departure_etrain_id`, `arrival_etrain_id`, `departure_at`.\n- hotels: an `explicit/hotel` deeplink. TWO modes, same idea as rail/bus. (1) Page (default, `kind=\"deeplink\"`): `hotel_alias` + `check_in` + `check_out` + `adults` (+ `children_ages`, `search_id`) opens the hotel's page with dates/guests pre-filled for the user to pick a room. (2) Straight-to-cart (`kind=\"checkout_deeplink\"`): also pass `offer_pack_hash` — a ROOM rate's `offerpack_hash` from `get_offer_details` (after the user picked a room) — and the link mints the cart for that pack, landing on the hotel page if the pack expired (fallback_to_details). NB the listing `best_offer.offerpack_hash` does NOT mint a cart — only a room-rate hash does. Page-mode fields ride in `checkout_ref`. Falls back to the pre-filled `fallback_url` page (`kind=\"hotel_page\"`) if the ref has no `hotel_alias`.\n\n`kind` ∈ `deeplink` / `checkout_deeplink` (rail/bus with seats; hotels with a pack) / `search_redirect` (avia) / `order_url` / `seats_url` (rail/bus fallback) / `hotel_page` (hotels fallback).",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: number of adults (`checkout_ref.adults`).",
+                "title": "Adults"
+              },
+              "arrival_avia_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Accepted from `checkout_ref` (avia orders-API city id, used by `register_checkout_passengers`); ignored here — safe to forward.",
+                "title": "Arrival Avia Id"
+              },
+              "arrival_city_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail`: destination city id (`arrival_st`).",
+                "title": "Arrival City Id"
+              },
+              "arrival_etrain_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `etrain`: destination station id for tutu.ru commuter schedule pages (`st2`).",
+                "title": "Arrival Etrain Id"
+              },
+              "arrival_geo_city_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: arrival city id (`legs[-1].segments[-1].to.city_id`, also in `checkout_ref.arrival_geo_city_id`). Required for the mtp-deeplink purchase URL.",
+                "title": "Arrival Geo City Id"
+              },
+              "arrival_geo_point_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail`: destination segment geo-point id (`checkout_ref.arrival_geo_point_id`). Required for the rail `explicit/train` deeplink.",
+                "title": "Arrival Geo Point Id"
+              },
+              "arrival_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: destination route id for `search[to]` on bus.tutu.ru/seats. Prefer this field from checkout_ref.",
+                "title": "Arrival Id"
+              },
+              "arrival_station_code": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail`: destination station code (`arr_st`). For `etrain` this is retained as a compatibility/debug field.",
+                "title": "Arrival Station Code"
+              },
+              "arrival_stop_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: display/debug destination stop geo-point id. Older checkout_ref objects used this as `search[to]`; new objects should also pass `arrival_id`.",
+                "title": "Arrival Stop Id"
+              },
+              "arrival_stop_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: display name for the destination stop. Accepted for pass-through compatibility; URL building uses `arrival_id` when present.",
+                "title": "Arrival Stop Name"
+              },
+              "car_number": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail` straight-to-cart: the chosen car (`cars[].car_number` from `get_rail_seatmap`).",
+                "title": "Car Number"
+              },
+              "card_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail` straight-to-cart: `checkout_ref.card_id` metadata (optional).",
+                "title": "Card Id"
+              },
+              "check_in": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: check-in date `YYYY-MM-DD` (`checkout_ref.check_in`).",
+                "title": "Check In"
+              },
+              "check_out": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: check-out date `YYYY-MM-DD` (`checkout_ref.check_out`).",
+                "title": "Check Out"
+              },
+              "children_ages": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: child ages (`checkout_ref.children_ages`), if any.",
+                "title": "Children Ages"
+              },
+              "city_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: origin city name.",
+                "title": "City From"
+              },
+              "city_to": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: destination city name.",
+                "title": "City To"
+              },
+              "departure_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "ISO-8601 departure datetime from the offer's first segment (e.g. `2026-04-30T13:30:00+03:00`). Used by rail (`date`), etrain (`date`), and bus (`search[on]` + `trip[start_time]`).",
+                "title": "Departure At"
+              },
+              "departure_avia_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Accepted from `checkout_ref` (avia orders-API city id, used by `register_checkout_passengers`); ignored here — safe to forward.",
+                "title": "Departure Avia Id"
+              },
+              "departure_city_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail`: origin city id (`departure_st`).",
+                "title": "Departure City Id"
+              },
+              "departure_etrain_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `etrain`: origin station id for tutu.ru commuter schedule pages (`st1`).",
+                "title": "Departure Etrain Id"
+              },
+              "departure_geo_city_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: departure city id (`legs[0].segments[0].from.city_id`, also in `checkout_ref.departure_geo_city_id`). Required for the mtp-deeplink purchase URL.",
+                "title": "Departure Geo City Id"
+              },
+              "departure_geo_point_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail`: origin segment geo-point id (`checkout_ref.departure_geo_point_id` = `legs[0].segments[0].from.geo_point_id`). Required for the rail `explicit/train` deeplink.",
+                "title": "Departure Geo Point Id"
+              },
+              "departure_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: origin route id for `search[from]` on bus.tutu.ru/seats. Prefer this field from checkout_ref.",
+                "title": "Departure Id"
+              },
+              "departure_station_code": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail`: origin station code (`dep_st`, e.g. `2000001`). For `etrain` this is retained as a compatibility/debug field.",
+                "title": "Departure Station Code"
+              },
+              "departure_stop_id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: display/debug origin stop geo-point id. Older checkout_ref objects used this as `search[from]`; new objects should also pass `departure_id`.",
+                "title": "Departure Stop Id"
+              },
+              "departure_stop_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus`: display name for the origin stop. Accepted for pass-through compatibility; URL building uses `departure_id` when present.",
+                "title": "Departure Stop Name"
+              },
+              "fallback_url": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: the pre-filled hotel page (`checkout_ref.fallback_url` / `best_offer.checkout_url`) — this is what hotels checkout returns.",
+                "title": "Fallback Url"
+              },
+              "fare_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail` straight-to-cart: the chosen fare type — pass the seatmap `fares[].fare_type` string (`REFUNDABLE`→1, `NON_REFUNDABLE`→2) or Tutu's integer code directly. ALWAYS pass it when the user picked a fare: omitted, the cart opens on the default (refundable) fare, which is pricier than a chosen non-refundable one. Unknown labels are omitted from the URL (tell the user to confirm the fare in the cart).",
+                "title": "Fare Type"
+              },
+              "gender_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail` straight-to-cart, gender-policy coupes only: which gender the compartment is sold as — `MALE`/`FEMALE` (ask the user; `MIXED`/`NO_GENDER` and ints 0..3 also accepted). Omit for regular cars.",
+                "title": "Gender Type"
+              },
+              "hotel_alias": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: the hotel's `/h_<alias>/` slug (`checkout_ref.hotel_alias`, also `best_offer`/row `alias` from `search_hotels` or `hotel.alias` from `get_offer_details`). Required to build the `explicit/hotel` deeplink; without it the branch degrades to the pre-filled hotel page (`fallback_url`).",
+                "title": "Hotel Alias"
+              },
+              "hotel_geo_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels`: the hotel's geo id (`checkout_ref.hotel_geo_id`). Display/debug; the page URL comes from `fallback_url`.",
+                "title": "Hotel Geo Id"
+              },
+              "is_round_trip": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: pass `checkout_ref.is_round_trip`. A direct round-trip offer builds a TWO-leg deeplink (both legs in one cart) — the tool joins the per-leg hashes and adds the return departure from `return_departure_at`. Connecting round-trips return the search page because `explicit/avia` currently supports one flight per direction. Forward `return_departure_at` from `checkout_ref` alongside this flag; without it the tool falls back to the search page. Other transports ignore this field.",
+                "title": "Is Round Trip"
+              },
+              "offer_hash": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: the stringified JSON from `offer.variants[i].offer_hash`; the deeplink hashes are extracted from it to build the purchase URL. A direct round-trip offer_hash carries both legs — the tool joins them and needs `return_departure_at` too. For `bus`: the `offer_hash` string used as `trip[hash]` in the checkout URL. If your host auto-parses the JSON back into a dict, pass it as a dict — we'll normalise it.",
+                "title": "Offer Hash"
+              },
+              "offer_pack_hash": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `hotels` straight-to-cart: a ROOM rate's `rooms[].rates[].offerpack_hash` from `get_offer_details` — pass it once the user picked a specific room and the deeplink mints the cart for that pack (`checkout=true`), falling back to the hotel page if the pack expired (`fallback_to_details=true`). NB the listing `best_offer.offerpack_hash` does NOT mint a cart (the redirector falls back to the hotel page); only a room-rate hash from `get_offer_details` does. Omit to open the hotel page for the user to pick a room.",
+                "title": "Offer Pack Hash"
+              },
+              "passengers": {
+                "default": 1,
+                "description": "For the bus fallback `seats_url`: number of passengers to prefill. Rail deeplinks/order URLs do not preselect passengers or seats.",
+                "maximum": 8,
+                "minimum": 1,
+                "title": "Passengers",
+                "type": "integer"
+              },
+              "passengers_adult": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Accepted from a bus `checkout_ref` (the adult share of the searched party, checked by `register_checkout_passengers`); ignored here — safe to forward.",
+                "title": "Passengers Adult"
+              },
+              "passengers_child": {
+                "anyOf": [
+                  {
+                    "maximum": 9,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: number of children (2–11 yrs) (`checkout_ref.passengers_child`). See `passengers_full`.",
+                "title": "Passengers Child"
+              },
+              "passengers_full": {
+                "anyOf": [
+                  {
+                    "maximum": 9,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: number of adults the search was for (`checkout_ref.passengers_full`). Pass it so the deeplink requests the SAME party you quoted — omit and Tutu defaults the cart to one adult, so a multi-passenger total won't match. Forward `passengers_full/child/infant` from `checkout_ref` together.",
+                "title": "Passengers Full"
+              },
+              "passengers_infant": {
+                "anyOf": [
+                  {
+                    "maximum": 9,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: number of infants (<2 yrs, lap) (`checkout_ref.passengers_infant`). See `passengers_full`.",
+                "title": "Passengers Infant"
+              },
+              "product_type": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "avia",
+                      "rail",
+                      "railway",
+                      "etrain",
+                      "bus",
+                      "hotels"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Product type of the offer. `railway` and `rail` are accepted as synonyms. Optional when passing `transport` from checkout_ref.",
+                "title": "Product Type"
+              },
+              "result_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail` straight-to-cart: `checkout_ref.result_id` metadata (optional).",
+                "title": "Result Id"
+              },
+              "return_departure_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For round-trip `avia`: ISO-8601 departure of the RETURN leg's first segment (`checkout_ref.return_departure_at` = `legs[1].segments[0].departure_at`, e.g. `2026-07-19T10:00:00+03:00`). Required to build a two-leg direct round-trip deeplink; omit for one-way.",
+                "title": "Return Departure At"
+              },
+              "search_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "`checkout_ref.search_id` — the searchId of the search the offer came from. REQUIRED for the `bus` straight-to-cart mode; optional metadata for `rail`.",
+                "title": "Search Id"
+              },
+              "search_results_url": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: the avia.tutu.ru search-results URL emitted in `checkout_ref.search_results_url`. Always returned alongside the deeplink so the user can fall back to browsing the listing page.",
+                "title": "Search Results Url"
+              },
+              "seat_count": {
+                "anyOf": [
+                  {
+                    "maximum": 8,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `bus` straight-to-cart: number of passengers. Defaults to the number of `seat_numbers` passed.",
+                "title": "Seat Count"
+              },
+              "seat_numbers": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Straight-to-cart seat choice, ONE seat per passenger. For `rail`: `seats[].number` values from `get_rail_seatmap` (all in the same `car_number`). For `bus`: ids from `get_offer_details` `seat_selection.available_seat_ids`. Pass ONLY seats the user explicitly confirmed — the link skips the seat wizard.",
+                "title": "Seat Numbers"
+              },
+              "segment_hash": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail` straight-to-cart: the offer's segment hash (`checkout_ref.segment_hash`). Required together with `offer_hash`, `car_number` and `seat_numbers` to mint the cart.",
+                "title": "Segment Hash"
+              },
+              "service_class": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `avia`: cabin class of the chosen variant. Three input shapes accepted: Tutu's upstream code (`ECONOMIC`/`PREMIUM_ECONOMY`/`BUSINESS`/`FIRST` — preferred, lives on each variant as `variants[i].service_class` and on the cheapest in `checkout_ref.service_class`), IATA letter (`Y`/`S`/`C`/`F` — what `search_avia` was called with), or the raw deeplink integer (`1`=Economy, `2`=PremiumEconomy, `3`=Business, `4`=First). When overriding `offer_hash` for a non-cheapest fare family, also override this from the same variant — and keep passing `is_round_trip` from `checkout_ref` (a fare swap doesn't change the offer's round-trip-ness).",
+                "title": "Service Class"
+              },
+              "train_number": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "For `rail`: the Express-3 train number such as `022А`. Copy it from `offer.checkout_ref.train_number` — do NOT read `segments[].voyage_no`, which is the passenger display number and differs from the bookable number for through-trains (e.g. displays `060*Г`, books `059Г`).",
+                "title": "Train Number"
+              },
+              "transport": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "avia",
+                      "rail",
+                      "railway",
+                      "etrain",
+                      "bus",
+                      "hotels"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Backward-compatible alias for `product_type`; matches the `transport` key emitted in checkout_ref.",
+                "title": "Transport"
+              }
+            },
+            "title": "create_checkout_linkArguments",
+            "type": "object"
+          },
+          "name": "create_checkout_link",
+          "outputSchema": null,
+          "title": "Create a checkout link for a selected offer (Tutu.ru)"
+        },
+        {
+          "_meta": null,
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Read a `tutu://` server resource and return its content. Use this when your MCP client doesn't auto-surface server resources in the prompt. Valid URIs: `tutu://help/overview` (full agent guide — start here), `tutu://geo` (city/point ids), `tutu://status` (upstream health), `tutu://special-offers` (experimental inspiration only). Returns `{uri, mime_type, content}`.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "uri": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "tutu://help/overview",
+                      "tutu://geo",
+                      "tutu://status",
+                      "tutu://special-offers"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "description": "Resource URI. Start with `tutu://help/overview` for the agent-facing reference.",
+                "title": "Uri"
+              }
+            },
+            "required": [
+              "uri"
+            ],
+            "title": "fetch_resourceArguments",
+            "type": "object"
+          },
+          "name": "fetch_resource",
+          "outputSchema": null,
+          "title": "Fetch a tutu:// MCP resource by URI"
+        }
+      ]
+    }
+  ],
+  "sha256": "1a00e172686c927cf2d540c27049abe79764ec0635c232c5b236eaec6ee751bd"
+}

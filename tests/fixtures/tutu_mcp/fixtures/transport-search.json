@@ -1,0 +1,138 @@
+{
+  "meta": {
+    "from": {
+      "geo_id": "fixture-ref",
+      "iata": "MOW",
+      "name": "Москва",
+      "region": "Москва город федерального значения"
+    },
+    "has_more": true,
+    "modes_requested": [
+      "avia",
+      "railway",
+      "bus",
+      "etrain"
+    ],
+    "modes_summary": {
+      "avia": {
+        "count": 7,
+        "min_duration_min": 90,
+        "min_price": 4774.0
+      },
+      "bus": {
+        "count": 5,
+        "min_duration_min": 600,
+        "min_price": 3100.0
+      },
+      "etrain": {
+        "count": 0,
+        "min_duration_min": null,
+        "min_price": null
+      },
+      "railway": {
+        "count": 7,
+        "min_duration_min": 686,
+        "min_price": 2587.61
+      }
+    },
+    "optimize_for": "price",
+    "page": 1,
+    "page_size": 3,
+    "to": {
+      "geo_id": "fixture-ref",
+      "iata": "KZN",
+      "name": "Казань",
+      "region": "городской округ Казань, Республика Татарстан"
+    },
+    "total_returned": 3,
+    "unavailable": []
+  },
+  "variants": [
+    {
+      "arrival_at": "2026-08-22T07:50:00+03:00",
+      "carriers": [
+        "ФПК"
+      ],
+      "cashback": {
+        "amount": 77.62,
+        "currency": "RUB"
+      },
+      "checkout_ref": {
+        "arrival_city_id": 1,
+        "arrival_geo_point_id": 1,
+        "arrival_station_code": "2060500",
+        "card_id": "fixture-ref",
+        "departure_at": "2026-08-21T19:16:00+03:00",
+        "departure_city_id": 1,
+        "departure_geo_point_id": 1,
+        "departure_station_code": "2000003",
+        "offer_hash": "fixture-ref",
+        "result_id": "fixture-ref",
+        "search_id": "fixture-ref",
+        "segment_hash": "fixture-ref",
+        "train_number": "128М",
+        "transport": "railway"
+      },
+      "checkout_url": "https://www.tutu.ru/fixture",
+      "departure_at": "2026-08-21T19:16:00+03:00",
+      "details_ref": {
+        "arrival_at": "2026-08-22T07:50:00+03:00",
+        "arrival_station_code": "2060500",
+        "carriers": [
+          "ФПК"
+        ],
+        "departure_at": "2026-08-21T19:16:00+03:00",
+        "departure_station_code": "2000003",
+        "duration_min": 754,
+        "price": {
+          "amount": 2587.61,
+          "currency": "RUB"
+        },
+        "source": "seats-gateway.seats-by-params",
+        "title": "Поезд 128М",
+        "train_number": "128М",
+        "transport": "railway"
+      },
+      "duration_min": 754,
+      "fares": {
+        "changeable_count": 0,
+        "count": 19,
+        "currency": "RUB",
+        "price_from": 2587.61,
+        "price_to": 16183.98,
+        "refundable_count": 14
+      },
+      "legs": [
+        {
+          "arrival_at": "2026-08-22T07:50:00+03:00",
+          "departure_at": "2026-08-21T19:16:00+03:00",
+          "duration_min": 754,
+          "from": "Москва — Казанский вокзал (2000003)",
+          "label": "outbound",
+          "segments": [
+            {
+              "arrival_at": "2026-08-22T07:50:00+03:00",
+              "carrier": "ФПК",
+              "departure_at": "2026-08-21T19:16:00+03:00",
+              "duration_min": 754,
+              "from": "Москва — Казанский вокзал (2000003)",
+              "from_geo_point_id": 1,
+              "to": "Казань — Казань Пасс (2060500)",
+              "to_geo_point_id": 1,
+              "voyage_no": "128М"
+            }
+          ],
+          "to": "Казань — Казань Пасс (2060500)"
+        }
+      ],
+      "offer_id": "fixture-ref",
+      "price": {
+        "amount": 2587.61,
+        "currency": "RUB"
+      },
+      "search_results_url": "https://www.tutu.ru/fixture",
+      "segments_count": 1,
+      "transport": "railway"
+    }
+  ]
+}

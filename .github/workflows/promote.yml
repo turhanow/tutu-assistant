@@ -1,0 +1,80 @@
+name: Promote image
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub Environment to promote into
+        type: choice
+        required: true
+        options:
+          - staging
+          - production
+      digest:
+        description: Immutable GHCR digest (sha256:...)
+        type: string
+        required: true
+
+concurrency:
+  group: promote-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  promote:
+    name: Promote verified digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: Validate digest
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Expected sha256:<64 lowercase hex characters>" >&2
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify and promote immutable image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ inputs.digest }}
+          TARGET: ${{ inputs.environment }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+          docker buildx imagetools create --tag "$IMAGE:$TARGET" "$IMAGE@$DIGEST"
+
+      - name: Write promotion summary
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ inputs.digest }}
+          TARGET: ${{ inputs.environment }}
+        run: |
+          {
+            echo "## Promoted image"
+            echo
+            echo "\`$IMAGE@$DIGEST\` → \`$IMAGE:$TARGET\`"
+            echo
+            echo "Rollback by promoting a previously known-good digest to the same environment."
+          } >> "$GITHUB_STEP_SUMMARY"

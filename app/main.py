@@ -1,0 +1,219 @@
+"""Composition root for wiring Telegram, OpenAI and Tutu adapters."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import suppress
+
+from telegram import BotCommand, Update
+from telegram.ext import Application, ContextTypes
+
+from app.adapters.buffered_analytics import BufferedAnalyticsSink, NullAnalyticsSink
+from app.adapters.clock import SystemClock
+from app.adapters.file_catalog import (
+    FileCatalogRepository,
+    FileDestinationCatalog,
+    FileTravelContentGateway,
+)
+from app.adapters.resilient_tutu import ProtectedTutuGateway
+from app.adapters.sqlite_feedback import SqliteFeedbackSink
+from app.adapters.tutu_mcp import TutuMcpPool
+from app.bootstrap import build_llm_resources
+from app.bot.conversation import TripConversation
+from app.bot.discovery_conversation import DiscoveryConversation
+from app.bot.feedback_conversation import FeedbackConversation
+from app.bot.router import BotRouter, build_routed_conversation_handler
+from app.bot.update_processor import ChatSerialUpdateProcessor
+from app.config import Settings
+from app.logging_config import configure_logging
+from app.services.candidate_selector import CandidateSelector
+from app.services.destination_feasibility import DestinationFeasibilityService
+from app.services.discovery_planner import DiscoveryPlanner
+from app.services.feedback_service import FeedbackService
+from app.services.product_analytics import ProductAnalytics
+from app.services.proposal_builder import GroundedProposalNarration, ProposalBuilder
+from app.services.readiness import build_readiness_report
+from app.services.trip_handoff import TripHandoffService
+from app.services.trip_planner import TripPlanner
+
+logger = logging.getLogger(__name__)
+
+BOT_COMMANDS = (
+    BotCommand("start", "Начать работу с ботом"),
+    BotCommand("newtrip", "Спланировать новую поездку"),
+    BotCommand("ideas", "Подобрать направление для поездки"),
+    BotCommand("help", "Показать справку"),
+    BotCommand("privacy", "Как обрабатываются данные"),
+    BotCommand("feedback", "Сообщить о проблеме"),
+    BotCommand("deletefeedback", "Удалить сохранённое обращение"),
+    BotCommand("cancel", "Отменить диалог и удалить параметры"),
+)
+
+
+async def handle_update_error(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    error = context.error
+    exc_info = None
+    if isinstance(error, BaseException):
+        exc_info = (type(error), error, error.__traceback__)
+    logger.error(
+        "telegram_update_failed",
+        exc_info=exc_info,
+        extra={"event": "telegram_update_failed", "category": "unexpected_error"},
+    )
+    if isinstance(update, Update) and update.effective_message is not None:
+        with suppress(Exception):
+            await update.effective_message.reply_text(
+                "Не удалось обработать сообщение. Параметры сохранены; "
+                "попробуйте ещё раз или используйте /newtrip."
+            )
+
+
+def build_application(settings: Settings) -> Application:
+    settings.validate_runtime()
+    llm = build_llm_resources(settings)
+    raw_gateway = TutuMcpPool(
+        str(settings.tutu_mcp_url),
+        size=settings.tutu_pool_size,
+        timeout_seconds=settings.tutu_timeout_seconds,
+    )
+    gateway = ProtectedTutuGateway(
+        raw_gateway,
+        max_inflight=settings.provider_max_inflight,
+        calls_per_minute=settings.provider_calls_per_minute,
+        failure_threshold=settings.provider_circuit_failure_threshold,
+        recovery_seconds=settings.provider_circuit_recovery_seconds,
+    )
+    clock = SystemClock(settings.app_timezone)
+    analytics = ProductAnalytics(
+        (
+            BufferedAnalyticsSink(
+                queue_size=settings.analytics_queue_size,
+                flush_timeout_seconds=settings.analytics_flush_timeout_seconds,
+            )
+            if settings.analytics_enabled
+            else NullAnalyticsSink()
+        ),
+        clock,
+    )
+    planner = TripPlanner(
+        gateway,
+        clock,
+        timeout_seconds=settings.search_timeout_seconds,
+    )
+    handoff = TripHandoffService(gateway)
+    known_conversation = TripConversation(
+        llm.parser,
+        planner,
+        clock,
+        timezone=settings.app_timezone,
+        handoff=handoff,
+        analytics=analytics,
+        enabled=not settings.bot_kill_switch,
+    )
+    catalog_repository = FileCatalogRepository.from_path(settings.destination_catalog_path)
+    selector = CandidateSelector(FileDestinationCatalog(catalog_repository))
+    discovery_planner = DiscoveryPlanner(
+        DestinationFeasibilityService(planner),
+        clock,
+        max_concurrency=settings.discovery_max_concurrency,
+        timeout_seconds=settings.discovery_verification_timeout_seconds,
+    )
+    discovery_conversation = DiscoveryConversation(
+        llm.intent_extractor,
+        selector,
+        discovery_planner,
+        ProposalBuilder(FileTravelContentGateway(catalog_repository), clock),
+        GroundedProposalNarration(llm.proposal_narrator),
+        clock,
+        timezone=settings.app_timezone,
+        handoff=handoff,
+        analytics=analytics,
+        enabled=not settings.bot_kill_switch and settings.discovery_enabled,
+    )
+    router = BotRouter(
+        llm.intent_extractor,
+        known_conversation,
+        discovery_conversation,
+        clock,
+        timezone=settings.app_timezone,
+        analytics=analytics,
+        enabled=not settings.bot_kill_switch,
+    )
+    feedback_conversation = FeedbackConversation(
+        FeedbackService(
+            SqliteFeedbackSink(
+                settings.feedback_db_path,
+                retention_days=settings.feedback_retention_days,
+            ),
+            clock,
+            analytics=analytics,
+            timeout_seconds=settings.feedback_timeout_seconds,
+        ),
+        retention_days=settings.feedback_retention_days,
+        enabled=not settings.bot_kill_switch and settings.feedback_enabled,
+    )
+
+    async def post_init(application: Application) -> None:
+        await raw_gateway.__aenter__()
+        capabilities = await gateway.discover_capabilities()
+        readiness = build_readiness_report(
+            clock=clock,
+            catalog_version=catalog_repository.version,
+            destination_count=catalog_repository.destination_count,
+            provider_schema_hash=capabilities.schema_hash,
+            provider_circuit_state=gateway.circuit_state,
+            kill_switch=settings.bot_kill_switch,
+        )
+        application.bot_data["health"] = {"status": "ok"}
+        application.bot_data["readiness"] = readiness.model_dump(mode="json")
+        application.bot_data["provider_metrics"] = gateway.metrics
+        logger.info("readiness_checked", extra={"schema_hash": capabilities.schema_hash})
+        await application.bot.set_my_commands(BOT_COMMANDS)
+
+    async def post_shutdown(_: Application) -> None:
+        await raw_gateway.close()
+        await analytics.close()
+        await llm.close()
+
+    application = (
+        Application.builder()
+        .token(settings.require_bot_token().get_secret_value())
+        .concurrent_updates(ChatSerialUpdateProcessor(settings.max_concurrent_updates))
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+    application.add_handler(
+        build_routed_conversation_handler(
+            router,
+            known_conversation,
+            discovery_conversation,
+            feedback_conversation,
+        )
+    )
+    application.add_error_handler(handle_update_error)
+    return application
+
+
+def main() -> None:
+    settings = Settings()
+    settings.validate_runtime()
+    configure_logging(
+        settings.log_level,
+        secrets=(
+            settings.require_bot_token().get_secret_value(),
+            settings.require_openai_api_key().get_secret_value(),
+        ),
+    )
+    application = build_application(settings)
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

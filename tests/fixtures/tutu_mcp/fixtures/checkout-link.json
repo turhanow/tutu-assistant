@@ -1,0 +1,6 @@
+{
+  "checkout_url": "https://www.tutu.ru/fixture",
+  "fallback_url": "https://www.tutu.ru/fixture",
+  "kind": "deeplink",
+  "note": "checkout_url is a Tutu deeplink that opens this hotel's page (dates + guests pre-filled) for the user to pick a room. To mint the cart with a chosen room instead, call again with that room's `offerpack_hash` from `get_offer_details` as `offer_pack_hash`."
+}

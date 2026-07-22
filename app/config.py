@@ -102,6 +102,8 @@ class Settings(BaseSettings):
         le=10,
     )
     bot_kill_switch: bool = Field(default=False, alias="BOT_KILL_SWITCH")
+    tone_of_voice_v2_enabled: bool = Field(default=True, alias="TONE_OF_VOICE_V2_ENABLED")
+    controlled_delight_enabled: bool = Field(default=True, alias="CONTROLLED_DELIGHT_ENABLED")
     discovery_enabled: bool = Field(default=True, alias="DISCOVERY_ENABLED")
     feedback_enabled: bool = Field(default=True, alias="FEEDBACK_ENABLED")
     analytics_enabled: bool = Field(default=True, alias="ANALYTICS_ENABLED")

@@ -349,6 +349,39 @@ async def test_narrator_rejects_unknown_evidence_and_repairs_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_narrator_rejects_slang_and_exclamation_marks_then_repairs() -> None:
+    unsafe = NarrationBatch(
+        items=[
+            NarrationItem(
+                proposal_id="proposal_1",
+                title="Топовый вайб!",
+                reason="Точно понравится!",
+                trade_off="Локальный транспорт не оценён.",
+                evidence_ids=["source_1"],
+            )
+        ]
+    )
+    safe = NarrationBatch(
+        items=[
+            NarrationItem(
+                proposal_id="proposal_1",
+                title="Исторические выходные в Коломне",
+                reason="Кремль и музей складываются в понятную программу.",
+                trade_off="Локальный транспорт не оценён.",
+                evidence_ids=["source_1"],
+            )
+        ]
+    )
+    client = FakeClient([unsafe, safe])
+    narrator = OpenAIProposalNarrator(client)  # type: ignore[arg-type]
+
+    result = await narrator.narrate([facts()], context=context())
+
+    assert len(client.responses.calls) == 2
+    assert result[0].title == "Исторические выходные в Коломне"
+
+
+@pytest.mark.asyncio
 async def test_narrator_rejects_empty_or_oversized_batch_before_network() -> None:
     client = FakeClient([])
     narrator = OpenAIProposalNarrator(client)  # type: ignore[arg-type]

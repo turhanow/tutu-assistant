@@ -55,6 +55,7 @@ from app.services.proposal_builder import (
     project_grounded_facts,
 )
 from app.services.trip_handoff import TripHandoffService
+from app.voice import Voice
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ class DiscoveryConversation:
         handoff: TripHandoffService | None = None,
         analytics: ProductAnalytics | None = None,
         enabled: bool = True,
+        voice: Voice | None = None,
     ) -> None:
         self._extractor = extractor
         self._selector = selector
@@ -102,6 +104,7 @@ class DiscoveryConversation:
         self._handoff = handoff
         self._analytics = analytics
         self._enabled = enabled
+        self._voice = voice or Voice()
         self._safety_salt = secrets.token_bytes(32)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -119,17 +122,16 @@ class DiscoveryConversation:
             dimensions={"flow_type": "destination_unknown"},
         )
         await update.effective_message.reply_text(
-            "Помогу выбрать, куда поехать на один день или выходные. Напишите город "
-            "отправления, даты и что хочется получить от поездки. Бюджет и допустимое "
-            "время в дороге можно добавить сразу.\n\n"
-            "Например: «Из Москвы на выходные 15–16 августа, хочется архитектуры и "
-            "гастрономии, до 25 000 ₽»."
+            self._voice.discovery_start,
+            parse_mode=ParseMode.HTML,
         )
         return DiscoveryState.INTAKE
 
     async def intake(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
-        progress = await message.reply_text("Понимаю пожелания и ограничения…")
+        progress = await message.reply_text(
+            self._voice.progress("discovery_parse", context.user_data)
+        )
         try:
             parsed = await self._extract(message.text or "", update)
         except LlmParseError:
@@ -184,7 +186,7 @@ class DiscoveryConversation:
             )
         context.user_data[_DRAFT] = parsed.discovery_draft
         if progress is not None:
-            await progress.edit_text("Пожелания распознаны. Проверяю, достаточно ли данных.")
+            await progress.edit_text("Понял настроение поездки. Проверяю, хватает ли вводных.")
         return await self._continue(message, context)
 
     async def clarification_input(
@@ -193,7 +195,9 @@ class DiscoveryConversation:
         context: ContextTypes.DEFAULT_TYPE,
     ) -> int:
         message = update.effective_message
-        progress = await message.reply_text("Учитываю ответы…")
+        progress = await message.reply_text(
+            self._voice.progress("discovery_clarify", context.user_data)
+        )
         try:
             parsed = await self._extract(message.text or "", update)
         except LlmParseError:
@@ -221,7 +225,7 @@ class DiscoveryConversation:
             context,
             dimensions={"flow_type": "destination_unknown"},
         )
-        await progress.edit_text("Ответы учтены.")
+        await progress.edit_text("Ответы добавлены к подборке.")
         return await self._continue(message, context)
 
     async def refine_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -230,7 +234,9 @@ class DiscoveryConversation:
         if not isinstance(current, DiscoveryDraft):
             await message.reply_text("Параметры устарели. Начните заново: /ideas")
             return ConversationHandler.END
-        progress = await message.reply_text("Применяю изменения к подборке…")
+        progress = await message.reply_text(
+            self._voice.progress("discovery_refine", context.user_data)
+        )
         try:
             parsed = await self._extract(message.text or "", update)
         except LlmParseError:
@@ -255,7 +261,7 @@ class DiscoveryConversation:
             parsed.discovery_draft,
         )
         self._advance_revision(context)
-        await progress.edit_text("Ограничения обновлены. Пересобираю направления.")
+        await progress.edit_text("Пожелания обновлены. Пересобираю направления.")
         return await self._continue(message, context)
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -305,7 +311,9 @@ class DiscoveryConversation:
                     "revision": context.user_data[_REVISION],
                 },
             )
-            progress = await query.message.reply_text("Повторно проверяю цены и доступность…")
+            progress = await query.message.reply_text(
+                self._voice.progress("discovery_recheck", context.user_data)
+            )
             return await self._verify_shortlist(
                 query.message,
                 context,
@@ -366,7 +374,7 @@ class DiscoveryConversation:
         missing = missing_discovery_fields(draft)
         if missing:
             questions = plan_clarifications(draft)
-            lines = ["Нужно уточнить несколько вещей:"]
+            lines = ["Чтобы подборка получилась точнее, уточните несколько вещей:"]
             lines.extend(f"{index}. {item.text}" for index, item in enumerate(questions, start=1))
             lines.append("Ответьте одним сообщением по этим пунктам.")
             await self._track(
@@ -381,7 +389,9 @@ class DiscoveryConversation:
         except DiscoveryInputError as error:
             await message.reply_text(f"Не удалось проверить параметры: {error}")
             return DiscoveryState.CLARIFY
-        progress = await message.reply_text("Подбираю направления по интересам и ограничениям…")
+        progress = await message.reply_text(
+            self._voice.progress("discovery_select", context.user_data)
+        )
         try:
             shortlist = await self._selector.select(request)
         except UnsupportedOriginError as error:
@@ -411,7 +421,7 @@ class DiscoveryConversation:
             )
             return DiscoveryState.RESULTS
         verification = await message.reply_text(
-            "Проверяю расписание и жильё для лучших направлений…"
+            self._voice.progress("discovery_verify", context.user_data)
         )
         return await self._verify_shortlist(message, context, shortlist, verification)
 
@@ -532,7 +542,7 @@ class DiscoveryConversation:
             failures=snapshot.trip_result.failures,
             searched_at=snapshot.trip_result.searched_at,
         )
-        status = await message.reply_text("Готовлю безопасные ссылки на Tutu…")
+        status = await message.reply_text(self._voice.progress("handoff", context.user_data))
         try:
             items = await self._handoff.create_checkout_items(selected, 0)
         except (TutuAssistantError, ValueError, IndexError):
@@ -582,11 +592,11 @@ class DiscoveryConversation:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"Программа · {name}",
+                        f"План на два дня · {name}",
                         callback_data=self._callback(context, DiscoveryAction.DETAILS, str(index)),
                     ),
                     InlineKeyboardButton(
-                        "На Tutu",
+                        "К оформлению",
                         callback_data=self._callback(context, DiscoveryAction.HANDOFF, str(index)),
                     ),
                 ]
@@ -594,7 +604,7 @@ class DiscoveryConversation:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"Не подходит · {name}",
+                        f"Почему не подходит · {name}",
                         callback_data=self._callback(context, DiscoveryAction.REJECT, str(index)),
                     )
                 ]
@@ -609,11 +619,11 @@ class DiscoveryConversation:
         return [
             [
                 InlineKeyboardButton(
-                    "Уточнить пожелания",
+                    "Изменить пожелания",
                     callback_data=self._callback(context, DiscoveryAction.REFINE),
                 ),
                 InlineKeyboardButton(
-                    "Проверить снова",
+                    "Обновить цены",
                     callback_data=self._callback(context, DiscoveryAction.RECHECK),
                 ),
             ],
@@ -709,7 +719,7 @@ class DiscoveryConversation:
             name,
             flow_id=context.user_data[_FLOW_ID],
             intent=intent,
-            dimensions=dimensions,
+            dimensions={**self._voice.analytics_dimensions, **(dimensions or {})},
         )
 
 

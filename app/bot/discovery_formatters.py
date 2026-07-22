@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from html import escape
 
-from app.bot.formatters import TRANSPORT_LABELS, format_money
+from app.bot.formatters import TRANSPORT_ICONS, TRANSPORT_LABELS, format_money
 from app.domain.discovery_models import (
     CandidateShortlist,
     ProposalCopy,
@@ -28,8 +28,11 @@ UNKNOWN_COST_LABELS = {
 
 def format_shortlist(shortlist: CandidateShortlist) -> str:
     if not shortlist.candidates:
-        return "<b>Подходящих направлений пока нет</b>\nПопробуйте изменить интересы или даты."
-    lines = ["<b>Короткий список направлений</b>"]
+        return (
+            "<b>Под эти условия направлений пока нет</b>\n"
+            "Попробуйте изменить даты, бюджет или допустимое время в дороге."
+        )
+    lines = ["<b>Есть несколько кандидатов на ваши выходные</b>"]
     for index, item in enumerate(shortlist.candidates, start=1):
         reasons = "; ".join(escape(reason) for reason in item.match_reasons)
         lines.append(f"{index}. <b>{escape(item.destination.name)}</b> — {reasons}")
@@ -43,7 +46,8 @@ def format_proposal_sections(
 ) -> tuple[str, ...]:
     copy_by_id = {item.proposal_id: item for item in copies}
     sections = [
-        "<b>Проверенные идеи для поездки</b>\nЦена и доступность актуальны на момент поиска."
+        "<b>Вот поездки, которые реально складываются</b>\n"
+        "Цена и доступность актуальны на момент поиска."
     ]
     for index, recommendation in enumerate(recommendations, start=1):
         copy = copy_by_id[f"proposal_{index}"]
@@ -118,17 +122,17 @@ def _format_proposal(
         f"В городе: {_format_duration(combination.metrics.time_in_city)}",
     ]
     if combination.hotel is not None:
-        lines.append(f"Отель: {escape(combination.hotel.name)}")
+        lines.append(f"🏨 Отель: {escape(combination.hotel.name)}")
     else:
-        lines.append("Отель: не нужен")
+        lines.append("🏨 Отель: не нужен")
     cost = proposal.cost
     if cost.confirmed_total is not None and cost.confirmed_currency is not None:
         lines.append(
-            "Подтверждённая стоимость: "
+            "💳 Подтверждённая стоимость: "
             + format_money(cost.confirmed_total, cost.confirmed_currency)
         )
     else:
-        lines.append("Подтверждённая стоимость: пока неизвестна")
+        lines.append("💳 Подтверждённая стоимость: пока неизвестна")
     if cost.estimated is not None:
         lines.append(
             "Дополнительно, оценка: "
@@ -152,14 +156,14 @@ def _recommendation_label(labels: frozenset[str]) -> str:
     ordered = [
         text
         for key, text in (
-            ("best_match", "лучшее общее соответствие"),
-            ("lowest_confirmed_cost", "самая низкая подтверждённая стоимость"),
-            ("most_time_in_city", "больше всего полезного времени в городе"),
+            ("best_match", "лучше всего подходит под запрос"),
+            ("lowest_confirmed_cost", "самый бюджетный из проверенных"),
+            ("most_time_in_city", "больше времени останется на город"),
         )
         if key in labels
     ]
     if len(ordered) > 1:
-        return "Лидер по нескольким критериям: " + ", ".join(ordered)
+        return "Сильный вариант сразу по нескольким причинам: " + ", ".join(ordered)
     return ordered[0].capitalize() if ordered else "Проверенный вариант"
 
 
@@ -172,7 +176,7 @@ def _format_leg(label, offer) -> str:
         else f"пересадок: {offer.transfers}"
     )
     return (
-        f"{label}: {TRANSPORT_LABELS[offer.mode]} · "
+        f"{TRANSPORT_ICONS[offer.mode]} {label}: {TRANSPORT_LABELS[offer.mode]} · "
         f"{_format_datetime(offer.departure_at)} → {_format_datetime(offer.arrival_at)} · "
         f"{transfers}"
     )

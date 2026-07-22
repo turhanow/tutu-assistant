@@ -36,15 +36,16 @@ from app.services.proposal_builder import GroundedProposalNarration, ProposalBui
 from app.services.readiness import build_readiness_report
 from app.services.trip_handoff import TripHandoffService
 from app.services.trip_planner import TripPlanner
+from app.voice import BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION, BRAND_NAME, Voice
 from app.webhook import run_webhook
 
 logger = logging.getLogger(__name__)
 
 BOT_COMMANDS = (
-    BotCommand("start", "Начать работу с ботом"),
-    BotCommand("newtrip", "Спланировать новую поездку"),
-    BotCommand("ideas", "Подобрать направление для поездки"),
-    BotCommand("help", "Показать справку"),
+    BotCommand("start", "Начать планировать поездку"),
+    BotCommand("newtrip", "Проверить готовый маршрут"),
+    BotCommand("ideas", "Подобрать идею для выходных"),
+    BotCommand("help", "Что умеет бот"),
     BotCommand("privacy", "Как обрабатываются данные"),
     BotCommand("feedback", "Сообщить о проблеме"),
     BotCommand("deletefeedback", "Удалить сохранённое обращение"),
@@ -105,6 +106,10 @@ def build_application(settings: Settings) -> Application:
         clock,
         timeout_seconds=settings.search_timeout_seconds,
     )
+    voice = Voice(
+        tone_v2_enabled=settings.tone_of_voice_v2_enabled,
+        controlled_delight_enabled=settings.controlled_delight_enabled,
+    )
     handoff = TripHandoffService(gateway)
     known_conversation = TripConversation(
         llm.parser,
@@ -114,6 +119,7 @@ def build_application(settings: Settings) -> Application:
         handoff=handoff,
         analytics=analytics,
         enabled=not settings.bot_kill_switch,
+        voice=voice,
     )
     catalog_repository = FileCatalogRepository.from_path(settings.destination_catalog_path)
     selector = CandidateSelector(FileDestinationCatalog(catalog_repository))
@@ -134,6 +140,7 @@ def build_application(settings: Settings) -> Application:
         handoff=handoff,
         analytics=analytics,
         enabled=not settings.bot_kill_switch and settings.discovery_enabled,
+        voice=voice,
     )
     router = BotRouter(
         llm.intent_extractor,
@@ -143,6 +150,7 @@ def build_application(settings: Settings) -> Application:
         timezone=settings.app_timezone,
         analytics=analytics,
         enabled=not settings.bot_kill_switch,
+        voice=voice,
     )
     feedback_conversation = FeedbackConversation(
         FeedbackService(
@@ -174,6 +182,9 @@ def build_application(settings: Settings) -> Application:
         application.bot_data["provider_metrics"] = gateway.metrics
         logger.info("readiness_checked", extra={"schema_hash": capabilities.schema_hash})
         await application.bot.set_my_commands(BOT_COMMANDS)
+        await application.bot.set_my_name(BRAND_NAME)
+        await application.bot.set_my_short_description(BOT_SHORT_DESCRIPTION)
+        await application.bot.set_my_description(BOT_DESCRIPTION)
 
     async def post_shutdown(_: Application) -> None:
         await raw_gateway.close()

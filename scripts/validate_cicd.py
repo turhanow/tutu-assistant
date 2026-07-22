@@ -93,6 +93,8 @@ def validate() -> None:
         "--max-instances=1",
         "BOT_TRANSPORT=webhook",
         "FEEDBACK_ENABLED=false",
+        "TONE_OF_VOICE_V2_ENABLED=true",
+        "CONTROLLED_DELIGHT_ENABLED=true",
         "TELEGRAM_BOT_TOKEN=telegram-bot-token:1",
         "OPENAI_API_KEY=openai-api-key:1",
         "TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:2",

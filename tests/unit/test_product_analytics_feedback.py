@@ -31,6 +31,7 @@ def event(**overrides) -> ProductEvent:
         "flow_id": "flow1234",
         "dimensions": {
             "flow_type": "destination_unknown",
+            "voice_version": "voice_v2",
             "candidate_count": 3,
             "catalog_version": "v1",
         },
@@ -271,5 +272,5 @@ async def test_feedback_feature_flag_stops_before_storage_calls() -> None:
     )
 
     assert state == -1
-    assert "временно отключён" in incoming.reply_text.call_args.args[0]
+    assert "временно недоступна" in incoming.reply_text.call_args.args[0]
     assert sink.records == []

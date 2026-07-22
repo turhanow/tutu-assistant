@@ -51,14 +51,15 @@ class FeedbackConversation:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if not self._enabled:
             await update.effective_message.reply_text(
-                "Приём обратной связи временно отключён. Попробуйте позже."
+                "Обратная связь в этой версии временно недоступна. Команда сохранена и "
+                "заработает после подключения постоянного защищённого хранилища."
             )
             return ConversationHandler.END
         self._flow_id(context)
         context.user_data[_RETURN_STATE] = self._detect_return_state(context)
         context.user_data.pop(_REASON, None)
         await update.effective_message.reply_text(
-            "Что пошло не так? Выберите основную причину. Обращение хранится локально "
+            "Что пошло не так? Выберите основную причину. Обращение хранится "
             f"не более {self._retention_days} дней; не отправляйте паспортные или "
             "платёжные данные.",
             reply_markup=self._reason_keyboard(),

@@ -57,9 +57,9 @@ def test_all_ranking_winners_are_explained_as_one_option() -> None:
         )
     )
 
-    assert title == "Рекомендованный · также самый дешёвый"
+    assert title == "Оптимальный и самый бюджетный"
     assert explanation == (
-        "Среди найденных он лидирует по цене, времени в дороге и внутренней оценке баланса."
+        "Это самый бюджетный и быстрый вариант, при этом лучший по балансу условий."
     )
     assert "cheapest" not in title + explanation
 
@@ -69,9 +69,9 @@ def test_two_winning_criteria_are_joined_in_plain_russian() -> None:
         frozenset({SortPreference.CHEAPEST, SortPreference.FASTEST})
     )
 
-    assert title == "Рекомендованный по двум критериям"
+    assert title == "Самый бюджетный и быстрый"
     assert explanation == (
-        "Этот вариант одновременно самый дешёвый и требует меньше всего времени в дороге "
+        "Этот вариант одновременно самый бюджетный и требует меньше всего времени в дороге "
         "среди найденных."
     )
 
@@ -162,7 +162,7 @@ def test_no_results_uses_typed_failure_message_and_escapes_provider_text() -> No
 
     rendered = format_results(result)
 
-    assert "Поездка не найдена" in rendered
+    assert "поездка пока не складывается" in rendered
     assert "&lt;подходящих&gt;" in rendered
 
 

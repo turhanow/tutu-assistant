@@ -54,6 +54,15 @@ TRANSPORT_LABELS = {
     TransportMode.UNKNOWN: "другой транспорт",
 }
 
+TRANSPORT_ICONS = {
+    TransportMode.AVIA: "✈️",
+    TransportMode.RAIL: "🚆",
+    TransportMode.BUS: "🚌",
+    TransportMode.ETRAIN: "🚆",
+    TransportMode.MIXED: "🧭",
+    TransportMode.UNKNOWN: "🧭",
+}
+
 
 def format_confirmation(request: TripRequest) -> str:
     modes = (
@@ -66,7 +75,7 @@ def format_confirmation(request: TripRequest) -> str:
         else "не указан"
     )
     lines = [
-        "<b>Проверьте параметры поездки</b>\n"
+        "<b>Всё верно?</b>\n"
         f"Маршрут: {escape(request.origin)} → {escape(request.destination)}\n"
         f"Даты: {_format_date(request.departure_date, year=True)} — "
         f"{_format_date(request.return_date, year=True)}\n"
@@ -107,8 +116,8 @@ def format_confirmation(request: TripRequest) -> str:
 def format_results(result: TripSearchResult) -> str:
     if not result.options:
         reason = result.failures[0].user_message if result.failures else "Варианты не найдены"
-        return f"<b>Поездка не найдена</b>\n{escape(reason)}"
-    cards = ["<b>Подходящие варианты</b>"]
+        return f"<b>На этих условиях поездка пока не складывается</b>\n{escape(reason)}"
+    cards = ["<b>Вот что складывается на эти даты</b>"]
     for index, option in enumerate(result.options, start=1):
         cards.append(_format_option(index, option))
     if result.failures:
@@ -154,21 +163,21 @@ def _format_option(index: int, option: RankedTripOption) -> str:
         explanation,
         _format_leg("Туда", combination.outbound),
         _format_leg("Обратно", combination.return_offer),
-        f"В дороге: {_format_duration(combination.metrics.total_travel_duration)}",
+        f"🕒 В дороге: {_format_duration(combination.metrics.total_travel_duration)}",
         f"В городе: {_format_duration(combination.metrics.time_in_city)}",
     ]
     if combination.hotel is not None and combination.stay is not None:
         nights = _plural(combination.stay.nights, "ночь", "ночи", "ночей")
         lines.extend(
             (
-                f"Отель: {escape(combination.hotel.name)}",
+                f"🏨 Отель: {escape(combination.hotel.name)}",
                 f"Проживание: {_format_date(combination.stay.check_in)} — "
                 f"{_format_date(combination.stay.check_out)}, {nights}",
             )
         )
     else:
-        lines.append("Отель: не нужен")
-    lines.append(f"Общая стоимость: {price_text}")
+        lines.append("🏨 Отель: не нужен")
+    lines.append(f"💳 Общая стоимость: {price_text}")
     if price.missing_components:
         missing = ", ".join(_component_name(item) for item in price.missing_components)
         lines.append(f"Не включено в итог: {escape(missing)}")
@@ -183,11 +192,11 @@ def format_ranking(labels: frozenset[SortPreference]) -> tuple[str, str]:
         SortPreference.BALANCED,
     }:
         return (
-            "Рекомендованный · также самый дешёвый",
-            "Среди найденных он лидирует по цене, времени в дороге и внутренней оценке баланса.",
+            "Оптимальный и самый бюджетный",
+            "Это самый бюджетный и быстрый вариант, при этом лучший по балансу условий.",
         )
     descriptions = {
-        SortPreference.CHEAPEST: "самый дешёвый",
+        SortPreference.CHEAPEST: "самый бюджетный",
         SortPreference.FASTEST: "требует меньше всего времени в дороге",
         SortPreference.BALANCED: "даёт лучший баланс цены и удобства",
     }
@@ -201,14 +210,23 @@ def format_ranking(labels: frozenset[SortPreference]) -> tuple[str, str]:
         if label in labels
     ]
     if len(ordered) == 2:
+        pair_title = {
+            frozenset({SortPreference.CHEAPEST, SortPreference.BALANCED}): (
+                "Оптимальный и самый бюджетный"
+            ),
+            frozenset({SortPreference.CHEAPEST, SortPreference.FASTEST}): (
+                "Самый бюджетный и быстрый"
+            ),
+            frozenset({SortPreference.FASTEST, SortPreference.BALANCED}): ("Оптимальный и быстрый"),
+        }[labels]
         return (
-            "Рекомендованный по двум критериям",
+            pair_title,
             f"Этот вариант одновременно {ordered[0]} и {ordered[1]} среди найденных.",
         )
     if ordered:
         label = ordered[0]
         title = {
-            SortPreference.CHEAPEST: "Самый дешёвый",
+            SortPreference.CHEAPEST: "Самый бюджетный",
             SortPreference.FASTEST: "Минимум времени в дороге",
             SortPreference.BALANCED: "Лучший баланс",
         }[next(iter(labels))]
@@ -251,7 +269,7 @@ def _format_leg(label: str, offer) -> str:
         else _plural(offer.transfers, "пересадка", "пересадки", "пересадок")
     )
     return (
-        f"{label}: {TRANSPORT_LABELS[offer.mode]} · "
+        f"{TRANSPORT_ICONS[offer.mode]} {label}: {TRANSPORT_LABELS[offer.mode]} · "
         f"{_format_datetime(offer.departure_at)} → {_format_datetime(offer.arrival_at)} · "
         f"{transfers}"
     )

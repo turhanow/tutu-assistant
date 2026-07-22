@@ -25,7 +25,7 @@ from app.domain.discovery_models import (
 from app.domain.errors import LlmParseError, LlmProviderError
 from app.domain.models import HotelMode, ParsedTripDraft, TransportMode
 from app.ports.discovery_llm import ConversationContext
-from app.prompts import intent_v1, narration_v1
+from app.prompts import intent_v1, narration_v2
 from app.services.explicit_constraints import (
     explicit_hotel_mode,
     explicitly_forbids_night_travel,
@@ -33,6 +33,7 @@ from app.services.explicit_constraints import (
     explicitly_relaxed,
     extract_explicit_party,
 )
+from app.voice import FORBIDDEN_SLANG
 
 MAX_INPUT_LENGTH = 2_000
 MAX_NARRATION_INPUT_LENGTH = 20_000
@@ -226,8 +227,8 @@ class OpenAIProposalNarrator:
         if len(payload) > MAX_NARRATION_INPUT_LENGTH:
             raise LlmParseError("grounded narration payload is too large")
         instructions = (
-            f"{narration_v1.INSTRUCTIONS}\nUser timezone: {context.timezone}. "
-            f"Prompt version: {narration_v1.PROMPT_VERSION}."
+            f"{narration_v2.INSTRUCTIONS}\nUser timezone: {context.timezone}. "
+            f"Prompt version: {narration_v2.PROMPT_VERSION}."
         )
         try:
             async with asyncio.timeout(self._timeout_seconds):
@@ -240,7 +241,8 @@ class OpenAIProposalNarrator:
                     if attempt == 0:
                         instructions += (
                             "\nRepair: preserve every proposal_id and use only its supplied "
-                            "evidence_ids. Return one item per proposal."
+                            "evidence_ids. Remove slang, emoji and exclamation marks. Keep "
+                            "trade-offs neutral. Return one item per proposal."
                         )
         except TimeoutError as error:
             raise LlmProviderError("OpenAI narration exceeded its time budget") from error
@@ -387,6 +389,8 @@ def _validate_narration(
     result: list[ProposalCopy] = []
     try:
         for item in batch.items:
+            if not _narration_style_is_safe(item):
+                return None
             allowed_evidence = expected[item.proposal_id].evidence_ids
             evidence_ids = frozenset(item.evidence_ids)
             if not evidence_ids or not evidence_ids.issubset(allowed_evidence):
@@ -403,3 +407,14 @@ def _validate_narration(
     except ValidationError:
         return None
     return tuple(result)
+
+
+def _narration_style_is_safe(item: NarrationItem) -> bool:
+    combined = " ".join((item.title, item.reason, item.trade_off)).casefold().replace("ё", "е")
+    forbidden = {word.replace("ё", "е") for word in FORBIDDEN_SLANG}
+    forbidden.update({"идеальный", "гарантированно понравится", "точно понравится"})
+    if any(word in combined for word in forbidden):
+        return False
+    if "!" in combined:
+        return False
+    return not any(symbol in combined for symbol in ("🔥", "✨", "😎", "😂", "🚀"))

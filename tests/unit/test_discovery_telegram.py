@@ -232,7 +232,7 @@ async def test_complete_ideas_request_reaches_verified_proposals_end_to_end() ->
     assert len(narration.calls) == 1
     assert context.user_data["discovery_revision"] == 1
     final_call = status.edit_text.call_args_list[-1]
-    assert "Проверенные идеи" in final_call.args[0]
+    assert "поездки, которые реально складываются" in final_call.args[0]
     keyboard = final_call.kwargs["reply_markup"]
     callbacks = [
         button.callback_data
@@ -300,7 +300,7 @@ async def test_impossible_constraints_return_recovery_actions_without_invented_o
     state = await service.intake(telegram_update(incoming), context)
 
     assert state is DiscoveryState.RESULTS
-    assert "Подходящих направлений пока нет" in status.edit_text.call_args.args[0]
+    assert "Под эти условия направлений пока нет" in status.edit_text.call_args.args[0]
     assert incoming.reply_text.call_args.kwargs["reply_markup"] is not None
     assert not planner.calls
     assert not builder.calls

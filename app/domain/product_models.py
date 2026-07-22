@@ -34,6 +34,7 @@ ALLOWED_PRODUCT_EVENTS = frozenset(
 ALLOWED_EVENT_DIMENSIONS = frozenset(
     {
         "flow_type",
+        "voice_version",
         "prompt_version",
         "catalog_version",
         "candidate_count",

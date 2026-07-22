@@ -44,6 +44,7 @@ from app.services.request_builder import (
 )
 from app.services.trip_handoff import TripHandoffService
 from app.services.trip_planner import TripPlanner
+from app.voice import HELP, PRIVACY, Voice
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ class TripConversation:
         handoff: TripHandoffService | None = None,
         analytics: ProductAnalytics | None = None,
         enabled: bool = True,
+        voice: Voice | None = None,
     ) -> None:
         self._parser = parser
         self._planner = planner
@@ -118,6 +120,7 @@ class TripConversation:
         self._handoff = handoff
         self._analytics = analytics
         self._enabled = enabled
+        self._voice = voice or Voice()
         self._safety_salt = secrets.token_bytes(32)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -133,14 +136,8 @@ class TripConversation:
             dimensions={"flow_type": "destination_known"},
         )
         await update.effective_message.reply_text(
-            "Я помогу сравнить короткую поездку туда и обратно и перейти к оформлению "
-            "на Tutu. Напишите маршрут, даты, пассажиров, транспорт, отель и бюджет "
-            "одним сообщением.\n\n"
-            "Например: «Москва — Казань, 25–27 июля, поезд, 2 взрослых, нужен "
-            "отель, до 30 000 ₽».\n\n"
-            "Для разбора запроса текст передаётся OpenAI. Паспортные и платёжные "
-            "данные не отправляйте. Незавершённый диалог очищается через 30 минут. "
-            "Подробнее: /privacy"
+            self._voice.known_start,
+            parse_mode=ParseMode.HTML,
         )
         return State.INTAKE
 
@@ -151,7 +148,7 @@ class TripConversation:
                 "Слишком много запросов за короткое время. Подождите минуту и попробуйте снова."
             )
             return State.INTAKE
-        progress = await message.reply_text("Разбираю маршрут и ограничения…")
+        progress = await message.reply_text(self._voice.progress("known_parse", context.user_data))
         started = time.perf_counter()
         try:
             parsed = await self._parser.parse(
@@ -168,7 +165,7 @@ class TripConversation:
                     "latency_ms": round((time.perf_counter() - started) * 1000),
                 },
             )
-            await progress.edit_text("Параметры распознаны. Проверьте их перед поиском.")
+            await progress.edit_text("Вводные собраны. Проверьте их перед поиском.")
         except (LlmParseError, LlmProviderError):
             draft = ParsedTripDraft()
             logger.info(
@@ -208,7 +205,7 @@ class TripConversation:
         if not self._allow(context, "llm", limit=8, within=timedelta(minutes=1)):
             await message.reply_text("Подождите минуту перед следующим изменением.")
             return State.CONFIRM
-        progress = await message.reply_text("Применяю изменения…")
+        progress = await message.reply_text(self._voice.progress("known_patch", context.user_data))
         try:
             parsed = await self._parser.parse(
                 message.text or "",
@@ -226,7 +223,7 @@ class TripConversation:
         context.user_data[_DRAFT] = draft
         context.user_data.pop(_RESULT, None)
         context.user_data.pop(_SEARCH_ID, None)
-        await progress.edit_text("Изменения применены. Проверьте обновлённые параметры.")
+        await progress.edit_text("Готово. Проверьте обновлённые параметры.")
         return await self._continue_or_confirm(message, context)
 
     async def form_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -365,7 +362,9 @@ class TripConversation:
                     context,
                     dimensions={"flow_type": "destination_known"},
                 )
-                status = await query.message.reply_text("Готовлю безопасные ссылки для оформления…")
+                status = await query.message.reply_text(
+                    self._voice.progress("handoff", context.user_data)
+                )
                 items = await self._handoff.create_checkout_items(result, index)
                 buttons = [
                     [
@@ -418,7 +417,7 @@ class TripConversation:
                 "Лимит поисков временно исчерпан. Подождите несколько минут; параметры сохранены."
             )
             return State.CONFIRM
-        progress = await message.reply_text("Ищу транспорт на Tutu…")
+        progress = await message.reply_text(self._voice.progress("known_search", context.user_data))
         await self._track(
             "verification_started",
             context,
@@ -493,20 +492,12 @@ class TripConversation:
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
-            "Если направление известно, используйте /newtrip. Если хотите выбрать, куда "
-            "поехать, используйте /ideas. Я уточню недостающие параметры и покажу до "
-            "трёх проверенных вариантов. /cancel очищает диалог, /privacy — правила данных."
+            HELP,
+            parse_mode=ParseMode.HTML,
         )
 
     async def privacy(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.effective_message.reply_text(
-            "Для извлечения маршрута и дат текст запроса передаётся OpenAI; для поиска "
-            "подтверждённые параметры передаются Tutu. Не отправляйте паспортные, "
-            "платёжные и иные чувствительные данные. Текущий диалог хранится в памяти "
-            "до отмены, перезапуска или 30 минут бездействия. /cancel удаляет его сразу. "
-            "Обращения /feedback хранятся отдельно не более настроенного срока и удаляются "
-            "по номеру через /deletefeedback."
-        )
+        await update.effective_message.reply_text(PRIVACY)
 
     async def feedback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
@@ -568,9 +559,9 @@ class TripConversation:
     def _confirmation_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("Искать", callback_data="trip:confirm")],
-                [InlineKeyboardButton("Изменить один параметр", callback_data="trip:edit")],
-                [InlineKeyboardButton("Отмена", callback_data="trip:cancel")],
+                [InlineKeyboardButton("Найти варианты", callback_data="trip:confirm")],
+                [InlineKeyboardButton("Изменить параметры", callback_data="trip:edit")],
+                [InlineKeyboardButton("Отменить", callback_data="trip:cancel")],
             ]
         )
 
@@ -598,13 +589,13 @@ class TripConversation:
                 (
                     [
                         InlineKeyboardButton(
-                            f"Подробнее о варианте {index + 1}",
+                            f"Посмотреть детали · вариант {index + 1}",
                             callback_data=f"trip:components:{search_id}:{index}",
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            f"Оформить на Tutu · вариант {index + 1}",
+                            f"Перейти к оформлению · вариант {index + 1}",
                             callback_data=f"trip:checkout:{search_id}:{index}",
                         )
                     ],
@@ -697,7 +688,7 @@ class TripConversation:
             name,
             flow_id=flow_id,
             intent=intent,
-            dimensions=dimensions,
+            dimensions={**self._voice.analytics_dimensions, **(dimensions or {})},
         )
 
 

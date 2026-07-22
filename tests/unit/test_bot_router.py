@@ -143,8 +143,8 @@ async def test_router_failure_offers_explicit_choice_and_start_has_both_examples
     assert "old" not in context.user_data
     assert len(context.user_data["flow_id"]) == 8
     start_text = start_update.effective_message.reply_text.call_args.args[0]
-    assert "Если город известен" in start_text
-    assert "Если нужна идея" in start_text
+    assert "Если город уже есть" in start_text
+    assert "предложу несколько проверенных идей" in start_text
 
     intake_update, progress = update("неясно")
     state = await router.intake(intake_update, context)

@@ -171,6 +171,8 @@ jobs:
             BOT_TRANSPORT=webhook
             PUBLIC_BASE_URL=https://${{ vars.CLOUD_RUN_SERVICE }}-${{ vars.GCP_PROJECT_NUMBER }}.${{ vars.GCP_REGION }}.run.app
             FEEDBACK_ENABLED=false
+            TONE_OF_VOICE_V2_ENABLED=true
+            CONTROLLED_DELIGHT_ENABLED=true
             MAX_CONCURRENT_UPDATES=16
             WEBHOOK_MAX_CONNECTIONS=16
           secrets_update_strategy: overwrite

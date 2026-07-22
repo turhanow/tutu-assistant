@@ -10,6 +10,7 @@ import warnings
 from enum import IntEnum
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -34,6 +35,7 @@ from app.domain.errors import LlmParseError, LlmProviderError
 from app.ports.clock import Clock
 from app.ports.discovery_llm import ConversationContext, IntentExtractor
 from app.services.product_analytics import ProductAnalytics
+from app.voice import Voice
 
 _FLOW_ID = "flow_id"
 _INTENT_TRACKED = "intent_analytics_tracked"
@@ -55,6 +57,7 @@ class BotRouter:
         timezone: str,
         analytics: ProductAnalytics | None = None,
         enabled: bool = True,
+        voice: Voice | None = None,
     ) -> None:
         self._extractor = extractor
         self._known = known
@@ -63,6 +66,7 @@ class BotRouter:
         self._timezone = timezone
         self._analytics = analytics
         self._enabled = enabled
+        self._voice = voice or Voice()
         self._safety_salt = secrets.token_bytes(32)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -79,19 +83,14 @@ class BotRouter:
             dimensions={"flow_type": "router"},
         )
         await update.effective_message.reply_text(
-            "Помогу и с готовым маршрутом, и с выбором направления. Опишите поездку "
-            "одним сообщением — я определю сценарий.\n\n"
-            "Если город известен: «Москва — Казань, 15–17 августа, поезд, нужен отель».\n"
-            "Если нужна идея: «Из Москвы на выходные, хочется природы и спокойного отдыха, "
-            "до 25 000 ₽».\n\n"
-            "Текст передаётся OpenAI для разбора. Не отправляйте паспортные и платёжные "
-            "данные. Подробнее: /privacy"
+            self._voice.router_start,
+            parse_mode=ParseMode.HTML,
         )
         return RouterState.INTAKE
 
     async def intake(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
-        progress = await message.reply_text("Определяю сценарий и параметры поездки…")
+        progress = await message.reply_text(self._voice.progress("route", context.user_data))
         try:
             parsed = await self._extractor.extract(
                 message.text or "",
@@ -130,9 +129,9 @@ class BotRouter:
             if parsed.known_draft is None:
                 await progress.edit_text("Не удалось извлечь маршрут. Попробуйте /newtrip.")
                 return RouterState.INTAKE
-            await progress.edit_text("Направление определено. Проверим параметры маршрута.")
+            await progress.edit_text("Маршрут вижу. Осталось проверить параметры перед поиском.")
             return await self._known.accept_draft(message, context, parsed.known_draft)
-        await progress.edit_text("Направление пока не выбрано. Соберу идеи под ваши пожелания.")
+        await progress.edit_text("Город пока не выбран — соберу идеи под ваши пожелания.")
         return await self._discovery.accept_result(message, context, parsed)
 
     async def route_choice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -140,7 +139,7 @@ class BotRouter:
         await query.answer()
         if query.data == "route:known":
             context.user_data.clear()
-            await query.message.reply_text("Опишите маршрут и даты одним сообщением.")
+            await query.message.reply_text("Напишите маршрут, даты и ограничения одним сообщением.")
             return State.INTAKE
         return await self._discovery.start(update, context)
 
@@ -148,8 +147,8 @@ class BotRouter:
     def _route_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("Направление известно", callback_data="route:known")],
-                [InlineKeyboardButton("Хочу выбрать направление", callback_data="route:ideas")],
+                [InlineKeyboardButton("Проверить готовый маршрут", callback_data="route:known")],
+                [InlineKeyboardButton("Подобрать идею", callback_data="route:ideas")],
             ]
         )
 
@@ -171,7 +170,7 @@ class BotRouter:
             name,
             flow_id=context.user_data[_FLOW_ID],
             intent=intent,
-            dimensions=dimensions,
+            dimensions={**self._voice.analytics_dimensions, **(dimensions or {})},
         )
 
 

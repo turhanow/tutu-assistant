@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from telegram.ext import ConversationHandler
@@ -15,7 +16,7 @@ class FakeGateway:
         return self
 
     async def discover_capabilities(self):
-        return None
+        return SimpleNamespace(schema_hash="test-schema")
 
     async def close(self) -> None:
         return None
@@ -61,6 +62,37 @@ def test_bot_command_catalog_matches_supported_handlers() -> None:
         "cancel",
     }
     assert all(description for description in commands.values())
+
+
+@pytest.mark.asyncio
+async def test_post_init_publishes_brand_profile_and_commands(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:test-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setattr(
+        main_module,
+        "build_llm_resources",
+        lambda _: SimpleNamespace(
+            parser=SimpleNamespace(),
+            intent_extractor=SimpleNamespace(),
+            proposal_narrator=SimpleNamespace(),
+            close=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(main_module, "TutuMcpPool", FakeGateway)
+    application = main_module.build_application(Settings(_env_file=None))
+    bot = SimpleNamespace(
+        set_my_commands=AsyncMock(),
+        set_my_name=AsyncMock(),
+        set_my_short_description=AsyncMock(),
+        set_my_description=AsyncMock(),
+    )
+    runtime = SimpleNamespace(bot=bot, bot_data={})
+
+    await application.post_init(runtime)
+
+    bot.set_my_commands.assert_awaited_once_with(main_module.BOT_COMMANDS)
+    bot.set_my_name.assert_awaited_once_with("Ту-да и обратно")
+    assert runtime.bot_data["readiness"]["status"] == "ok"
 
 
 def test_analytics_feature_flag_selects_null_sink(monkeypatch) -> None:

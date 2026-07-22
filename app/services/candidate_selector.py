@@ -153,11 +153,11 @@ class CandidateSelector:
         reasons: list[str] = []
         if overlap:
             labels = ", ".join(TAG_LABELS.get(tag, tag) for tag in sorted(overlap)[:2])
-            reasons.append(f"Совпадают интересы: {labels}")
+            reasons.append(f"Подходит по интересам: {labels}")
         if duration_score >= Decimal("0.8"):
-            reasons.append("Формат подходит для короткой поездки")
+            reasons.append("Удобный формат для короткой поездки")
         if not reasons:
-            reasons.append("Есть подтверждённый базовый контент для сравнения")
+            reasons.append("Есть проверенные идеи для короткой программы")
         return DestinationCandidate(
             destination=profile,
             match_score=score,

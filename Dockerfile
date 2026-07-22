@@ -17,7 +17,7 @@ RUN python -m pip wheel --no-deps --wheel-dir /wheels .
 
 FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93 AS runtime
 
-LABEL org.opencontainers.image.title="Tutu Assistant" \
+LABEL org.opencontainers.image.title="Ту-да и обратно" \
       org.opencontainers.image.description="Telegram assistant for short-trip planning"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

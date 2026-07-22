@@ -23,7 +23,7 @@ def test_generated_intent_corpus_is_deterministic_and_balanced() -> None:
 
 def test_checked_in_eval_files_pass_release_gate() -> None:
     intent = load_jsonl(Path("evals/intent_v1.jsonl"))
-    narration = load_jsonl(Path("evals/narration_v1.jsonl"))
+    narration = load_jsonl(Path("evals/narration_v2.jsonl"))
 
     validate_intent(intent)
     validate_narration(narration)

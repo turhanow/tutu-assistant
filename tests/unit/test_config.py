@@ -11,6 +11,8 @@ def test_defaults_do_not_require_secrets() -> None:
     assert settings.app_timezone == "Europe/Moscow"
     assert settings.openai_model == "gpt-5.6-sol"
     assert str(settings.openai_base_url) == "https://api.openai.com/v1"
+    assert settings.tone_of_voice_v2_enabled
+    assert settings.controlled_delight_enabled
     assert "telegram_bot_token" not in repr(settings) or "SecretStr" not in repr(settings)
 
 

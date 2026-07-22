@@ -28,7 +28,11 @@ def missing_discovery_fields(draft: DiscoveryDraft) -> tuple[str, ...]:
         missing.append("origin")
     if draft.departure_date is None or draft.return_date is None:
         missing.append("dates")
-    if not draft.experience.motives and not draft.experience.interests:
+    if (
+        not draft.experience.motives
+        and not draft.experience.interests
+        and draft.experience.pace is None
+    ):
         missing.append("motives")
     if draft.hotel_mode is None:
         missing.append("hotel_mode")

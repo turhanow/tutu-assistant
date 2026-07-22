@@ -7,6 +7,7 @@ from app.domain.discovery_models import (
     DiscoveryDraft,
     ExperienceProfile,
     RoadTolerance,
+    TravelPace,
 )
 from app.domain.models import HotelMode
 from app.services.clarification_policy import plan_clarifications
@@ -148,3 +149,20 @@ def test_clarification_policy_uses_optional_questions_after_critical_fields() ->
     ]
     assert not any(item.required for item in questions)
     assert plan_clarifications(complete_draft(), limit=0) == ()
+
+
+def test_required_clarification_does_not_append_optional_interview_questions() -> None:
+    draft = complete_draft(hotel_mode=None, budget=None)
+
+    questions = plan_clarifications(draft, limit=3)
+
+    assert [item.field for item in questions] == ["hotel_mode"]
+    assert questions[0].required
+
+
+def test_explicit_relaxed_pace_is_enough_to_describe_discovery_motive() -> None:
+    draft = complete_draft(
+        experience=ExperienceProfile(pace=TravelPace.RELAXED),
+    )
+
+    assert "motives" not in missing_discovery_fields(draft)

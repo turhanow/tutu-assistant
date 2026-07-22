@@ -29,9 +29,10 @@ def plan_clarifications(
     bounded_limit = min(limit, 3)
     critical = missing_discovery_fields(draft)
     optional = useful_optional_fields(draft)
-    ordered = tuple((field, True) for field in critical) + tuple(
-        (field, False) for field in optional if field not in critical
-    )
+    # Do not append nice-to-have questions while a user is resolving required fields.
+    # This keeps the dialogue focused and lets safe domain defaults handle party/road limits.
+    selected_fields = critical or optional
+    ordered = tuple((field, field in critical) for field in selected_fields)
     return tuple(
         ClarificationQuestion(field=field, text=QUESTIONS[field], required=required)
         for field, required in ordered[:bounded_limit]

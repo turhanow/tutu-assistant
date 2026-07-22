@@ -45,6 +45,26 @@ class FailingParser:
         raise LlmProviderError("unavailable")
 
 
+class PatchParser:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def parse(self, text, *, now, timezone, safety_identifier=None):
+        self.calls.append(text)
+        patches = {
+            "Из Москвы": ParsedTripDraft(origin="Москва"),
+            "15–16 августа 2026": ParsedTripDraft(
+                departure_date="2026-08-15",
+                return_date="2026-08-16",
+            ),
+            "Один взрослый": ParsedTripDraft(adults=1),
+            "Можно поезд или автобус": ParsedTripDraft(allowed_modes={"rail", "bus"}),
+            "Нужен отель": ParsedTripDraft(hotel_mode=HotelMode.REQUIRED),
+            "До 20000 рублей": ParsedTripDraft(budget="20000"),
+        }
+        return ParseResult(draft=patches[text])
+
+
 class FakeHandoff:
     def __init__(self) -> None:
         self.details_calls = 0
@@ -117,7 +137,9 @@ async def test_natural_language_always_calls_parser_and_mcp_waits_for_confirmati
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_switches_to_form_without_recalling_llm() -> None:
+async def test_llm_failure_form_keeps_deterministic_fallback_when_patch_llm_is_unavailable() -> (
+    None
+):
     parser = FailingParser()
     planner = FakePlanner()
     conversation = TripConversation(
@@ -138,8 +160,120 @@ async def test_llm_failure_switches_to_form_without_recalling_llm() -> None:
         )
 
     assert state is State.CONFIRM
-    assert len(parser.calls) == 1
+    assert len(parser.calls) == 6
     assert not planner.calls
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_form_answers_merge_all_recognized_slots_without_state_loss() -> None:
+    parser = PatchParser()
+    conversation = TripConversation(
+        parser,  # type: ignore[arg-type]
+        FakePlanner(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    context = SimpleNamespace(
+        user_data={
+            "trip_draft": ParsedTripDraft(destination="Ярославль"),
+            "trip_pending_field": "origin",
+        }
+    )
+
+    for answer in (
+        "Из Москвы",
+        "15–16 августа 2026",
+        "Один взрослый",
+        "Можно поезд или автобус",
+        "Нужен отель",
+    ):
+        state = await conversation.form_input(update_with_message(message(answer)), context)
+
+    assert state is State.CONFIRM
+    draft = context.user_data["trip_draft"]
+    assert draft.origin == "Москва"
+    assert draft.destination == "Ярославль"
+    assert str(draft.departure_date) == "2026-08-15"
+    assert str(draft.return_date) == "2026-08-16"
+    assert draft.adults == 1
+    assert {item.value for item in draft.allowed_modes} == {"rail", "bus"}
+    assert draft.hotel_mode is HotelMode.REQUIRED
+
+    state = await conversation.modify_text(
+        update_with_message(message("До 20000 рублей")),
+        context,
+    )
+    assert state is State.CONFIRM
+    assert context.user_data["trip_draft"].budget == 20000
+
+
+@pytest.mark.asyncio
+async def test_reversed_dates_keep_route_and_explain_which_date_to_fix() -> None:
+    conversation = TripConversation(
+        FailingParser(),
+        FakePlanner(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    context = SimpleNamespace(user_data={})
+    incoming = message("Москва — Казань, обратно 10 августа, туда 12 августа 2026 года")
+
+    state = await conversation.intake(update_with_message(incoming), context)
+
+    assert state is State.FORM
+    draft = context.user_data["trip_draft"]
+    assert draft.origin == "Москва"
+    assert draft.destination == "Казань"
+    assert str(draft.departure_date) == "2026-08-12"
+    assert draft.return_date is None
+    replies = " ".join(call.args[0] for call in incoming.reply_text.call_args_list if call.args)
+    assert "Дата возвращения не может быть раньше" in replies
+
+
+@pytest.mark.asyncio
+async def test_contradictions_are_named_while_unambiguous_route_is_preserved() -> None:
+    conversation = TripConversation(
+        FailingParser(),
+        FakePlanner(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    context = SimpleNamespace(user_data={})
+    incoming = message(
+        "Москва — Казань, туда 12 августа 2026, обратно 13 августа, только самолёт, "
+        "самолёты не предлагать, отель нужен и не нужен одновременно"
+    )
+
+    state = await conversation.intake(update_with_message(incoming), context)
+
+    assert state is State.FORM
+    draft = context.user_data["trip_draft"]
+    assert draft.origin == "Москва"
+    assert draft.destination == "Казань"
+    progress = incoming.reply_text.return_value
+    rendered = " ".join(call.args[0] for call in progress.edit_text.call_args_list)
+    assert "противоречия" in rendered
+    assert "самолёт" in rendered
+    assert "отель" in rendered
+
+
+@pytest.mark.asyncio
+async def test_sensitive_data_is_rejected_before_known_trip_parser_and_state_update() -> None:
+    parser = FailingParser()
+    conversation = TripConversation(
+        parser,
+        FakePlanner(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    context = SimpleNamespace(user_data={})
+    incoming = message("Сохрани карту 1111 1111 1111 1111 и подбери поездку")
+
+    state = await conversation.intake(update_with_message(incoming), context)
+
+    assert state is State.INTAKE
+    assert not parser.calls
+    assert "Не могу принимать или сохранять" in incoming.reply_text.call_args.args[0]
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from app.bot.conversation import State
 from app.bot.discovery_conversation import DiscoveryState
 from app.domain.product_models import FeedbackReason
 from app.services.feedback_service import FeedbackService
+from app.services.input_safety import SENSITIVE_DATA_RESPONSE, contains_sensitive_data
 
 _REASON = "feedback_reason"
 _FLOW_ID = "feedback_flow_id"
@@ -85,6 +86,9 @@ class FeedbackConversation:
         return FeedbackState.COMMENT
 
     async def comment(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        if contains_sensitive_data(update.effective_message.text or ""):
+            await update.effective_message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return FeedbackState.COMMENT
         return await self._submit(update.effective_message, context, update.effective_message.text)
 
     async def skip_comment(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

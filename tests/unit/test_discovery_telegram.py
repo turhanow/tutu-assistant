@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.bot.callbacks import CallbackCodec, DiscoveryAction, DiscoveryCallback
-from app.bot.discovery_conversation import DiscoveryConversation, DiscoveryState
+from app.bot.discovery_conversation import (
+    DiscoveryConversation,
+    DiscoveryState,
+    _no_proposals_message,
+)
 from app.bot.discovery_formatters import (
     format_program,
     format_proposal_sections,
@@ -22,11 +26,13 @@ from app.domain.discovery_models import (
     ExperienceProfile,
     IntentParseResult,
     ProposalCopy,
+    TravelPace,
     TripIntent,
 )
 from app.domain.errors import LlmParseError
 from app.domain.models import CheckoutLink, HotelMode, TripCheckoutItem, TripComponent
 from app.services.discovery_ranking import rank_proposals
+from app.services.discovery_request_builder import build_discovery_request
 from app.services.product_analytics import ProductAnalytics
 from tests.unit.test_discovery_proposals import candidate, feasibility, proposal
 
@@ -144,7 +150,11 @@ def complete_draft(**overrides) -> DiscoveryDraft:
 
 def telegram_message(text: str = ""):
     status = SimpleNamespace(edit_text=AsyncMock())
-    value = SimpleNamespace(text=text, reply_text=AsyncMock(return_value=status))
+    value = SimpleNamespace(
+        text=text,
+        reply_text=AsyncMock(return_value=status),
+        edit_text=AsyncMock(),
+    )
     return value, status
 
 
@@ -283,6 +293,20 @@ async def test_mapping_failure_is_reported_as_technical_not_as_bad_user_input() 
 
 
 @pytest.mark.asyncio
+async def test_sensitive_data_stops_discovery_before_progress_llm_and_state_merge() -> None:
+    service, extractor, *_ = conversation()
+    context = SimpleNamespace(user_data={})
+    incoming, _ = telegram_message("Сохрани карту 1111 1111 1111 1111")
+
+    state = await service.intake(telegram_update(incoming), context)
+
+    assert state is DiscoveryState.INTAKE
+    assert not extractor.calls
+    assert incoming.reply_text.await_count == 1
+    assert "Не могу принимать или сохранять" in incoming.reply_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_impossible_constraints_return_recovery_actions_without_invented_options() -> None:
     empty_selector = FakeSelector(())
     service, _, _, planner, builder, narration = conversation(
@@ -331,6 +355,7 @@ async def test_stale_revision_is_rejected_and_recheck_uses_existing_shortlist() 
     )
 
     context.user_data["discovery_revision"] = 1
+    replies_before_recheck = incoming.reply_text.await_count
     recheck_query = SimpleNamespace(
         data=recheck_data,
         answer=AsyncMock(),
@@ -342,6 +367,24 @@ async def test_stale_revision_is_rejected_and_recheck_uses_existing_shortlist() 
     assert context.user_data["discovery_revision"] == 2
     assert len(planner.calls) == 2
     assert len(narration.calls) == 1
+    incoming.edit_text.assert_awaited()
+    assert incoming.reply_text.await_count == replies_before_recheck
+
+
+@pytest.mark.asyncio
+async def test_discovery_button_after_flow_switch_is_always_acknowledged() -> None:
+    service, *_ = conversation()
+    query = SimpleNamespace(data="d1:abcd1234:1:dt:0", answer=AsyncMock())
+
+    await service.stale_callback(
+        SimpleNamespace(callback_query=query),
+        SimpleNamespace(user_data={}),
+    )
+
+    query.answer.assert_awaited_once_with(
+        "Эта кнопка относится к предыдущей подборке. Запустите новую через /ideas.",
+        show_alert=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -404,6 +447,7 @@ async def test_details_reject_reason_and_handoff_remain_inside_current_revision(
         answer=AsyncMock(),
         message=incoming,
     )
+    assert keyboard.inline_keyboard[1][0].text.startswith("Что не понравилось")
     await service.callback(SimpleNamespace(callback_query=reject_query), context)
     reason_keyboard = incoming.reply_text.call_args.kwargs["reply_markup"]
     reason_query = SimpleNamespace(
@@ -426,6 +470,23 @@ async def test_details_reject_reason_and_handoff_remain_inside_current_revision(
     assert handoff.calls[0][1] == 0
     handoff_result = handoff.calls[0][0]
     assert len(handoff_result.options) == 1
+
+
+def test_no_proposals_names_budget_and_recovery_levers_without_false_precision() -> None:
+    request = build_discovery_request(
+        complete_draft(
+            budget="1000",
+            hotel_mode=HotelMode.REQUIRED,
+            experience=ExperienceProfile(pace=TravelPace.RELAXED),
+        ),
+        today=date(2026, 7, 22),
+    )
+
+    rendered = _no_proposals_message(request)
+
+    assert "1 000 ₽" in rendered
+    assert "обязательным отелем" in rendered
+    assert "увеличить бюджет" in rendered
 
 
 def test_empty_candidate_shortlist_model_used_by_flow_is_valid() -> None:

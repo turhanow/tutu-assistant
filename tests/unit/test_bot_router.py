@@ -145,6 +145,11 @@ async def test_router_failure_offers_explicit_choice_and_start_has_both_examples
     start_text = start_update.effective_message.reply_text.call_args.args[0]
     assert "Если город уже есть" in start_text
     assert "предложу несколько проверенных идей" in start_text
+    start_keyboard = start_update.effective_message.reply_text.call_args.kwargs["reply_markup"]
+    assert [row[0].callback_data for row in start_keyboard.inline_keyboard] == [
+        "route:known",
+        "route:ideas",
+    ]
 
     intake_update, progress = update("неясно")
     state = await router.intake(intake_update, context)
@@ -174,3 +179,43 @@ async def test_router_mapping_failure_is_not_misreported_as_unclear_user_input()
     text = progress.edit_text.call_args.args[0]
     assert "техническая ошибка" in text
     assert "надёжно определить" not in text
+
+
+@pytest.mark.asyncio
+async def test_router_rejects_sensitive_data_before_openai() -> None:
+    extractor = Extractor(error=AssertionError("extractor must not be called"))
+    router = BotRouter(
+        extractor,  # type: ignore[arg-type]
+        KnownConversation(),  # type: ignore[arg-type]
+        IdeasConversation(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    incoming, _ = update("Сохрани карту 1111 1111 1111 1111")
+
+    state = await router.intake(incoming, SimpleNamespace(user_data={}))
+
+    assert state is RouterState.INTAKE
+    assert not extractor.calls
+    assert (
+        "Не могу принимать или сохранять"
+        in (incoming.effective_message.reply_text.call_args.args[0])
+    )
+
+
+@pytest.mark.asyncio
+async def test_plain_text_after_cancel_gets_explicit_recovery_buttons() -> None:
+    router = BotRouter(
+        Extractor(),  # type: ignore[arg-type]
+        KnownConversation(),  # type: ignore[arg-type]
+        IdeasConversation(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    incoming, _ = update("15–16 августа")
+
+    await router.orphan_text(incoming, SimpleNamespace(user_data={}))
+
+    reply = incoming.effective_message.reply_text.call_args
+    assert "Активного диалога нет" in reply.args[0]
+    assert len(reply.kwargs["reply_markup"].inline_keyboard) == 2

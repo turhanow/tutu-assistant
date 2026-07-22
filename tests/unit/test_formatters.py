@@ -90,6 +90,8 @@ def test_result_names_transport_for_each_direction() -> None:
     assert "В городе:" in rendered
     assert "Проживание: 22 августа — 23 августа, 1 ночь" in rendered
     assert "rail" not in rendered
+    assert "В известную сумму входят: дорога туда, дорога обратно, отель" in rendered
+    assert "Не включено: питание, городской транспорт и активности" in rendered
 
 
 def test_no_hotel_result_explicitly_states_that_accommodation_is_absent() -> None:
@@ -198,3 +200,12 @@ def test_generic_provider_transport_title_is_localized() -> None:
 
     assert "Автобусный билет" in rendered
     assert "bus offer" not in rendered
+
+
+def test_railway_provider_title_is_never_exposed_to_user() -> None:
+    details = OfferDetails(product_type="railway", title="railway offer")
+
+    rendered = format_details(TripComponent.OUTBOUND, details)
+
+    assert "Билет на поезд" in rendered
+    assert "railway offer" not in rendered

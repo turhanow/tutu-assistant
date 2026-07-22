@@ -16,6 +16,7 @@ from app.domain.models import (
     TravelerComposition,
     TripRequest,
 )
+from app.services.known_input_guardrails import normalize_city_answer
 
 REQUIRED_FIELDS = (
     "origin",
@@ -47,9 +48,11 @@ def apply_form_answer(
 ) -> ParsedTripDraft:
     value = raw_value.strip()
     if field in {"origin", "destination"}:
-        if not 1 <= len(value) <= 200:
-            raise DraftInputError("Введите название города длиной от 1 до 200 символов.")
-        return draft.model_copy(update={field: value})
+        try:
+            city = normalize_city_answer(value)
+        except ValueError as error:
+            raise DraftInputError(str(error)) from error
+        return draft.model_copy(update={field: city})
     if field in {"departure_date", "return_date"}:
         return draft.model_copy(update={field: _parse_date(value, today=today)})
     if field == "event_date":

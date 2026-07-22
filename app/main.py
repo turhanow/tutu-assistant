@@ -166,27 +166,61 @@ def build_application(settings: Settings) -> Application:
         enabled=not settings.bot_kill_switch and settings.feedback_enabled,
     )
 
-    async def post_init(application: Application) -> None:
-        await raw_gateway.__aenter__()
-        capabilities = await gateway.discover_capabilities()
-        readiness = build_readiness_report(
+    async def warm_provider(application: Application) -> None:
+        try:
+            await raw_gateway.__aenter__()
+            capabilities = await gateway.discover_capabilities()
+        except Exception:
+            logger.exception("provider_startup_warmup_failed")
+            return
+        application.bot_data["readiness"] = build_readiness_report(
             clock=clock,
             catalog_version=catalog_repository.version,
             destination_count=catalog_repository.destination_count,
             provider_schema_hash=capabilities.schema_hash,
             provider_circuit_state=gateway.circuit_state,
             kill_switch=settings.bot_kill_switch,
-        )
-        application.bot_data["health"] = {"status": "ok"}
-        application.bot_data["readiness"] = readiness.model_dump(mode="json")
-        application.bot_data["provider_metrics"] = gateway.metrics
+        ).model_dump(mode="json")
         logger.info("readiness_checked", extra={"schema_hash": capabilities.schema_hash})
-        await application.bot.set_my_commands(BOT_COMMANDS)
-        await application.bot.set_my_name(BRAND_NAME)
-        await application.bot.set_my_short_description(BOT_SHORT_DESCRIPTION)
-        await application.bot.set_my_description(BOT_DESCRIPTION)
 
-    async def post_shutdown(_: Application) -> None:
+    async def publish_bot_profile(application: Application) -> None:
+        try:
+            await asyncio.gather(
+                application.bot.set_my_commands(BOT_COMMANDS),
+                application.bot.set_my_name(BRAND_NAME),
+                application.bot.set_my_short_description(BOT_SHORT_DESCRIPTION),
+                application.bot.set_my_description(BOT_DESCRIPTION),
+            )
+        except Exception:
+            logger.exception("telegram_profile_sync_failed")
+
+    async def initialize_external_runtime(application: Application) -> None:
+        await asyncio.gather(warm_provider(application), publish_bot_profile(application))
+
+    async def post_init(application: Application) -> None:
+        application.bot_data["health"] = {"status": "ok"}
+        application.bot_data["readiness"] = build_readiness_report(
+            clock=clock,
+            catalog_version=catalog_repository.version,
+            destination_count=catalog_repository.destination_count,
+            provider_schema_hash=None,
+            provider_circuit_state=gateway.circuit_state,
+            kill_switch=settings.bot_kill_switch,
+        ).model_dump(mode="json")
+        application.bot_data["provider_metrics"] = gateway.metrics
+        application.bot_data["startup_task"] = asyncio.create_task(
+            initialize_external_runtime(application),
+            name="external-runtime-warmup",
+        )
+        # Let in-memory/fake adapters complete in tests without waiting for real network I/O.
+        await asyncio.sleep(0)
+
+    async def post_shutdown(application: Application) -> None:
+        startup_task = application.bot_data.pop("startup_task", None)
+        if isinstance(startup_task, asyncio.Task) and not startup_task.done():
+            startup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await startup_task
         await raw_gateway.close()
         await analytics.close()
         await llm.close()

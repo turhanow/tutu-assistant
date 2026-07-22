@@ -1,8 +1,9 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from telegram.ext import ConversationHandler
+from telegram.ext import CallbackQueryHandler, ConversationHandler
 
 import app.main as main_module
 from app.config import Settings
@@ -40,11 +41,18 @@ def test_application_wires_conversation_and_job_queue(monkeypatch) -> None:
     application = main_module.build_application(Settings(_env_file=None))
 
     assert application.job_queue is not None
-    assert any(
-        isinstance(handler, ConversationHandler)
+    conversation_handler = next(
+        handler
         for group in application.handlers.values()
         for handler in group
+        if isinstance(handler, ConversationHandler)
     )
+    stale_patterns = {
+        handler.pattern.pattern
+        for handler in conversation_handler.fallbacks
+        if isinstance(handler, CallbackQueryHandler) and hasattr(handler.pattern, "pattern")
+    }
+    assert {"^trip:", "^d1:"}.issubset(stale_patterns)
     assert application.error_handlers
 
 
@@ -89,9 +97,52 @@ async def test_post_init_publishes_brand_profile_and_commands(monkeypatch) -> No
     runtime = SimpleNamespace(bot=bot, bot_data={})
 
     await application.post_init(runtime)
+    await runtime.bot_data["startup_task"]
 
     bot.set_my_commands.assert_awaited_once_with(main_module.BOT_COMMANDS)
     bot.set_my_name.assert_awaited_once_with("Ту-да и обратно")
+    assert runtime.bot_data["readiness"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_post_init_does_not_block_static_commands_on_provider_cold_start(monkeypatch) -> None:
+    release_provider = asyncio.Event()
+
+    class SlowGateway(FakeGateway):
+        async def __aenter__(self):
+            await release_provider.wait()
+            return self
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:test-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setattr(
+        main_module,
+        "build_llm_resources",
+        lambda _: SimpleNamespace(
+            parser=SimpleNamespace(),
+            intent_extractor=SimpleNamespace(),
+            proposal_narrator=SimpleNamespace(),
+            close=AsyncMock(),
+        ),
+    )
+    monkeypatch.setattr(main_module, "TutuMcpPool", SlowGateway)
+    application = main_module.build_application(Settings(_env_file=None))
+    bot = SimpleNamespace(
+        set_my_commands=AsyncMock(),
+        set_my_name=AsyncMock(),
+        set_my_short_description=AsyncMock(),
+        set_my_description=AsyncMock(),
+    )
+    runtime = SimpleNamespace(bot=bot, bot_data={})
+
+    await asyncio.wait_for(application.post_init(runtime), timeout=0.1)
+
+    assert runtime.bot_data["health"] == {"status": "ok"}
+    assert runtime.bot_data["readiness"]["status"] == "not_ready"
+    assert not runtime.bot_data["startup_task"].done()
+
+    release_provider.set()
+    await runtime.bot_data["startup_task"]
     assert runtime.bot_data["readiness"]["status"] == "ok"
 
 

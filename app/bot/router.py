@@ -22,7 +22,6 @@ from telegram.ext import (
 from telegram.warnings import PTBUserWarning
 
 from app.bot.conversation import (
-    KNOWN_ANY_RESULT_CALLBACK_PATTERN,
     KNOWN_CONTROL_CALLBACK_PATTERN,
     KNOWN_RESULT_CALLBACK_PATTERN,
     State,
@@ -34,6 +33,7 @@ from app.domain.discovery_models import TripIntent
 from app.domain.errors import LlmParseError, LlmProviderError
 from app.ports.clock import Clock
 from app.ports.discovery_llm import ConversationContext, IntentExtractor
+from app.services.input_safety import SENSITIVE_DATA_RESPONSE, contains_sensitive_data
 from app.services.product_analytics import ProductAnalytics
 from app.voice import Voice
 
@@ -85,11 +85,15 @@ class BotRouter:
         await update.effective_message.reply_text(
             self._voice.router_start,
             parse_mode=ParseMode.HTML,
+            reply_markup=self._route_keyboard(),
         )
         return RouterState.INTAKE
 
     async def intake(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
+        if contains_sensitive_data(message.text or ""):
+            await message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return RouterState.INTAKE
         progress = await message.reply_text(self._voice.progress("route", context.user_data))
         try:
             parsed = await self._extractor.extract(
@@ -142,6 +146,15 @@ class BotRouter:
             await query.message.reply_text("Напишите маршрут, даты и ограничения одним сообщением.")
             return State.INTAKE
         return await self._discovery.start(update, context)
+
+    async def orphan_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Give plain text outside an active conversation an explicit next step."""
+
+        del context
+        await update.effective_message.reply_text(
+            "Активного диалога нет. Выберите, что хотите сделать:",
+            reply_markup=self._route_keyboard(),
+        )
 
     @staticmethod
     def _route_keyboard() -> InlineKeyboardMarkup:
@@ -199,6 +212,7 @@ def build_routed_conversation_handler(
                 CommandHandler("newtrip", known.start),
                 CommandHandler("ideas", discovery.start),
                 *common_commands,
+                MessageHandler(text, router.orphan_text),
             ],
             states={
                 RouterState.INTAKE: [
@@ -252,8 +266,9 @@ def build_routed_conversation_handler(
                 *common_commands,
                 CallbackQueryHandler(
                     known.stale_result_callback,
-                    pattern=KNOWN_ANY_RESULT_CALLBACK_PATTERN,
+                    pattern=r"^trip:",
                 ),
+                CallbackQueryHandler(discovery.stale_callback, pattern=r"^d1:"),
                 MessageHandler(filters.COMMAND, known.unknown_command),
             ],
             allow_reentry=True,

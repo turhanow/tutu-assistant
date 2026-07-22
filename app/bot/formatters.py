@@ -177,10 +177,14 @@ def _format_option(index: int, option: RankedTripOption) -> str:
         )
     else:
         lines.append("🏨 Отель: не нужен")
-    lines.append(f"💳 Общая стоимость: {price_text}")
+    lines.append(f"💳 Известная стоимость: {price_text}")
+    included = _known_price_components(combination)
+    if included:
+        lines.append("В известную сумму входят: " + ", ".join(included))
     if price.missing_components:
         missing = ", ".join(_component_name(item) for item in price.missing_components)
-        lines.append(f"Не включено в итог: {escape(missing)}")
+        lines.append(f"Пока не учтено из бронируемых компонентов: {escape(missing)}")
+    lines.append("Не включено: питание, городской транспорт и активности")
     lines.extend(f"⚠️ {escape(warning)}" for warning in combination.warnings)
     return "\n".join(lines)
 
@@ -240,6 +244,7 @@ def _localized_details_title(component: TripComponent, title: str) -> str:
         "bus offer": "Автобусный билет",
         "rail offer": "Билет на поезд",
         "train offer": "Билет на поезд",
+        "railway offer": "Билет на поезд",
         "etrain offer": "Билет на электричку",
         "flight offer": "Авиабилет",
         "avia offer": "Авиабилет",
@@ -338,3 +343,14 @@ def _component_name(value: str) -> str:
         "return": "дорога обратно",
         "hotel": "отель",
     }.get(value, value)
+
+
+def _known_price_components(combination) -> list[str]:
+    values: list[str] = []
+    if combination.outbound.price is not None:
+        values.append("дорога туда")
+    if combination.return_offer.price is not None:
+        values.append("дорога обратно")
+    if combination.hotel is not None and combination.hotel.price is not None:
+        values.append("отель")
+    return values

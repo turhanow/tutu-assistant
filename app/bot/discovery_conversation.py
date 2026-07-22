@@ -19,12 +19,13 @@ from app.bot.discovery_formatters import (
     format_shortlist,
     pack_html_sections,
 )
-from app.bot.formatters import COMPONENT_LABELS
+from app.bot.formatters import COMPONENT_LABELS, format_money
 from app.domain.discovery_models import (
     CandidateShortlist,
     DiscoveryDraft,
     DiscoveryFeasibilityResult,
     DiscoveryProposalResult,
+    DiscoveryRequest,
     ExperienceProfile,
     IntentParseResult,
     RoadTolerance,
@@ -36,7 +37,7 @@ from app.domain.errors import (
     TutuAssistantError,
     UnsupportedOriginError,
 )
-from app.domain.models import TripSearchResult
+from app.domain.models import HotelMode, TripSearchResult
 from app.ports.clock import Clock
 from app.ports.discovery_llm import ConversationContext, IntentExtractor
 from app.services.candidate_selector import CandidateSelector
@@ -47,6 +48,7 @@ from app.services.discovery_request_builder import (
     build_discovery_request,
     missing_discovery_fields,
 )
+from app.services.input_safety import SENSITIVE_DATA_RESPONSE, contains_sensitive_data
 from app.services.product_analytics import ProductAnalytics
 from app.services.proposal_builder import (
     GroundedProposalNarration,
@@ -129,6 +131,9 @@ class DiscoveryConversation:
 
     async def intake(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
+        if contains_sensitive_data(message.text or ""):
+            await message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return DiscoveryState.INTAKE
         progress = await message.reply_text(
             self._voice.progress("discovery_parse", context.user_data)
         )
@@ -195,6 +200,9 @@ class DiscoveryConversation:
         context: ContextTypes.DEFAULT_TYPE,
     ) -> int:
         message = update.effective_message
+        if contains_sensitive_data(message.text or ""):
+            await message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return DiscoveryState.CLARIFY
         progress = await message.reply_text(
             self._voice.progress("discovery_clarify", context.user_data)
         )
@@ -230,6 +238,9 @@ class DiscoveryConversation:
 
     async def refine_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
+        if contains_sensitive_data(message.text or ""):
+            await message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return DiscoveryState.REFINE
         current = context.user_data.get(_DRAFT)
         if not isinstance(current, DiscoveryDraft):
             await message.reply_text("Параметры устарели. Начните заново: /ideas")
@@ -311,14 +322,14 @@ class DiscoveryConversation:
                     "revision": context.user_data[_REVISION],
                 },
             )
-            progress = await query.message.reply_text(
+            await query.message.edit_text(
                 self._voice.progress("discovery_recheck", context.user_data)
             )
             return await self._verify_shortlist(
                 query.message,
                 context,
                 shortlist,
-                progress,
+                query.message,
                 use_llm_narration=False,
             )
         if callback.action is DiscoveryAction.REJECT:
@@ -366,6 +377,17 @@ class DiscoveryConversation:
             return await self.start(update, context)
         return DiscoveryState.RESULTS
 
+    async def stale_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Acknowledge discovery buttons after another flow replaced their state."""
+
+        del context
+        query = update.callback_query
+        if query is not None:
+            await query.answer(
+                "Эта кнопка относится к предыдущей подборке. Запустите новую через /ideas.",
+                show_alert=True,
+            )
+
     async def _continue(self, message, context) -> int:
         draft = context.user_data.get(_DRAFT)
         if not isinstance(draft, DiscoveryDraft):
@@ -373,16 +395,13 @@ class DiscoveryConversation:
             return ConversationHandler.END
         missing = missing_discovery_fields(draft)
         if missing:
-            questions = plan_clarifications(draft)
-            lines = ["Чтобы подборка получилась точнее, уточните несколько вещей:"]
-            lines.extend(f"{index}. {item.text}" for index, item in enumerate(questions, start=1))
-            lines.append("Ответьте одним сообщением по этим пунктам.")
+            question = plan_clarifications(draft, limit=1)[0]
             await self._track(
                 "clarification_shown",
                 context,
                 dimensions={"flow_type": "destination_unknown"},
             )
-            await message.reply_text("\n".join(lines))
+            await message.reply_text(question.text)
             return DiscoveryState.CLARIFY
         try:
             request = build_discovery_request(draft, today=self._clock.now().date())
@@ -475,8 +494,7 @@ class DiscoveryConversation:
         )
         if not proposals.recommendations:
             await progress.edit_text(
-                "На эти даты не удалось подтвердить целостную поездку. Попробуйте изменить "
-                "ограничения или повторить проверку позже.",
+                _no_proposals_message(shortlist.request),
                 reply_markup=self._result_controls_keyboard(context),
             )
             return DiscoveryState.RESULTS
@@ -604,7 +622,7 @@ class DiscoveryConversation:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"Почему не подходит · {name}",
+                        f"Что не понравилось · {name}",
                         callback_data=self._callback(context, DiscoveryAction.REJECT, str(index)),
                     )
                 ]
@@ -777,3 +795,23 @@ def _price_completeness(result: DiscoveryProposalResult) -> str:
     if any(item.confirmed_total is not None for item in costs):
         return "partial"
     return "unknown"
+
+
+def _no_proposals_message(request: DiscoveryRequest) -> str:
+    if request.budget is not None:
+        hotel_required = request.hotel_mode is HotelMode.REQUIRED
+        hotel_hint = "с обязательным отелем" if hotel_required else "с условиями проживания"
+        recovery = (
+            "увеличить бюджет, изменить даты или выбрать вариант без отеля"
+            if hotel_required
+            else "увеличить бюджет, изменить даты или допустимое время в дороге"
+        )
+        return (
+            "Среди проверенных вариантов ни один не уложился во все условия, включая бюджет "
+            f"до {format_money(request.budget, request.currency)} и поездку {hotel_hint}. "
+            f"Попробуйте {recovery}."
+        )
+    return (
+        "На эти даты не удалось подтвердить целостную поездку. Попробуйте изменить даты, "
+        "условия проживания или допустимое время в дороге."
+    )

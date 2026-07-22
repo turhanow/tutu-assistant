@@ -35,6 +35,8 @@ from app.domain.errors import LlmParseError, LlmProviderError, TutuAssistantErro
 from app.domain.models import ParsedTripDraft, TripComponent, TripRequest, TripSearchResult
 from app.ports.clock import Clock
 from app.ports.parser import RequestParser
+from app.services.input_safety import SENSITIVE_DATA_RESPONSE, contains_sensitive_data
+from app.services.known_input_guardrails import explicit_conflicts, recover_known_draft
 from app.services.product_analytics import ProductAnalytics
 from app.services.request_builder import (
     DraftInputError,
@@ -143,21 +145,28 @@ class TripConversation:
 
     async def intake(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
+        source_text = message.text or ""
+        if contains_sensitive_data(source_text):
+            await message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return State.INTAKE
         if not self._allow(context, "llm", limit=8, within=timedelta(minutes=1)):
             await message.reply_text(
                 "Слишком много запросов за короткое время. Подождите минуту и попробуйте снова."
             )
             return State.INTAKE
+        conflicts = explicit_conflicts(source_text)
         progress = await message.reply_text(self._voice.progress("known_parse", context.user_data))
         started = time.perf_counter()
+        parsed_successfully = False
         try:
             parsed = await self._parser.parse(
-                message.text or "",
+                source_text,
                 now=self._clock.now(),
                 timezone=self._timezone,
                 safety_identifier=self._safety_identifier(update),
             )
             draft = parsed.draft
+            parsed_successfully = True
             logger.info(
                 "product_event",
                 extra={
@@ -165,9 +174,8 @@ class TripConversation:
                     "latency_ms": round((time.perf_counter() - started) * 1000),
                 },
             )
-            await progress.edit_text("Вводные собраны. Проверьте их перед поиском.")
         except (LlmParseError, LlmProviderError):
-            draft = ParsedTripDraft()
+            draft = recover_known_draft(source_text, today=self._clock.now().date())
             logger.info(
                 "product_event",
                 extra={
@@ -176,8 +184,8 @@ class TripConversation:
                 },
             )
             await progress.edit_text(
-                "Не получилось уверенно определить параметры. Уточню обязательные "
-                "поля по шагам и не буду повторно спрашивать уже введённые данные."
+                "Не получилось разобрать весь запрос. Однозначные параметры сохранены; "
+                "остальное уточню по шагам."
             )
         await self._track(
             "intent_classified",
@@ -186,6 +194,26 @@ class TripConversation:
             dimensions={"flow_type": "destination_known"},
         )
         context.user_data[_DRAFT] = draft
+        if conflicts:
+            updates = {}
+            if any("отель" in item for item in conflicts):
+                updates["hotel_mode"] = None
+            if any("самолёт" in item for item in conflicts):
+                updates["allowed_modes"] = frozenset()
+            context.user_data[_DRAFT] = draft.model_copy(update=updates)
+            await progress.edit_text(
+                "В запросе есть противоречия:\n"
+                + "\n".join(f"• {item}" for item in conflicts)
+                + "\nОднозначные маршрут и даты сохранены."
+            )
+            field = "hotel_mode" if "hotel_mode" in updates else "allowed_modes"
+            context.user_data[_PENDING_FIELD] = field
+            await message.reply_text(
+                "Уточните одним сообщением, нужен ли отель и какой транспорт можно использовать."
+            )
+            return State.FORM
+        if parsed_successfully:
+            await progress.edit_text("Вводные собраны. Проверяю, хватает ли данных.")
         return await self._continue_or_confirm(message, context)
 
     async def accept_draft(self, message, context, draft: ParsedTripDraft) -> int:
@@ -199,6 +227,9 @@ class TripConversation:
     async def modify_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Apply a natural-language patch while preserving the current request."""
         message = update.effective_message
+        if contains_sensitive_data(message.text or ""):
+            await message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return State.CONFIRM
         current = context.user_data.get(_DRAFT)
         if not isinstance(current, ParsedTripDraft):
             return await self.intake(update, context)
@@ -228,16 +259,46 @@ class TripConversation:
 
     async def form_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
+        source_text = message.text or ""
         draft = context.user_data.get(_DRAFT)
         field = context.user_data.get(_PENDING_FIELD)
         if not isinstance(draft, ParsedTripDraft) or not isinstance(field, str):
             context.user_data[_DRAFT] = ParsedTripDraft()
             return await self._ask_field(message, context, "origin")
+        if contains_sensitive_data(source_text):
+            await message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return State.FORM
+        conflicts = explicit_conflicts(source_text)
+        if conflicts:
+            await message.reply_text(
+                "В ответе остались противоречия:\n"
+                + "\n".join(f"• {item}" for item in conflicts)
+                + "\nУточните условия без взаимоисключающих вариантов."
+            )
+            return State.FORM
+        parse = getattr(self._parser, "parse", None)
+        if callable(parse):
+            try:
+                parsed = await parse(
+                    source_text,
+                    now=self._clock.now(),
+                    timezone=self._timezone,
+                    safety_identifier=self._safety_identifier(update),
+                )
+            except (LlmParseError, LlmProviderError):
+                parsed = None
+        else:
+            parsed = None
+        if parsed is not None:
+            merged = self._merge_drafts(draft, parsed.draft)
+            if merged != draft:
+                context.user_data[_DRAFT] = merged
+                return await self._continue_or_confirm(message, context)
         try:
             draft = apply_form_answer(
                 draft,
                 field,
-                message.text or "",
+                source_text,
                 today=self._clock.now().date(),
             )
         except DraftInputError as error:
@@ -521,6 +582,21 @@ class TripConversation:
 
     async def _continue_or_confirm(self, message, context) -> int:
         draft = context.user_data[_DRAFT]
+        if (
+            draft.departure_date is not None
+            and draft.return_date is not None
+            and draft.return_date < draft.departure_date
+        ):
+            context.user_data[_DRAFT] = draft.model_copy(update={"return_date": None})
+            await message.reply_text(
+                "Дата возвращения не может быть раньше даты отправления. "
+                "Маршрут и дата отправления сохранены."
+            )
+            return await self._ask_field(message, context, "return_date")
+        if draft.departure_date is not None and draft.departure_date < self._clock.now().date():
+            context.user_data[_DRAFT] = draft.model_copy(update={"departure_date": None})
+            await message.reply_text("Дата отправления уже прошла. Остальные параметры сохранены.")
+            return await self._ask_field(message, context, "departure_date")
         missing = next_missing_field(draft)
         if missing is not None:
             return await self._ask_field(message, context, missing)

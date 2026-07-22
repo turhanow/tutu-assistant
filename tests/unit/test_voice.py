@@ -67,3 +67,9 @@ def test_sensitive_copy_has_no_delight() -> None:
 
     assert not any(line in sensitive for line in DELIGHT_COPY.values())
     assert voice.analytics_dimensions == {"voice_version": "voice_v2"}
+
+
+def test_moscow_only_discovery_scope_is_disclosed_before_intake() -> None:
+    assert "для выезда из Москвы" in ROUTER_START
+    assert "для выезда из Москвы" in DISCOVERY_START
+    assert "/newtrip" in DISCOVERY_START

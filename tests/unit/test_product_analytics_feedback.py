@@ -258,6 +258,27 @@ async def test_feedback_returns_to_existing_discovery_results() -> None:
 
 
 @pytest.mark.asyncio
+async def test_feedback_never_persists_payment_data() -> None:
+    sink = FeedbackSink()
+    conversation = FeedbackConversation(
+        FeedbackService(sink, FakeClock())  # type: ignore[arg-type]
+    )
+    context = SimpleNamespace(
+        user_data={
+            "feedback_reason": FeedbackReason.OTHER,
+            "feedback_flow_id": "abcd1234",
+        }
+    )
+    incoming = message("Карта 1111 1111 1111 1111")
+
+    state = await conversation.comment(SimpleNamespace(effective_message=incoming), context)
+
+    assert state is FeedbackState.COMMENT
+    assert not sink.records
+    assert "Не могу принимать или сохранять" in incoming.reply_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_feedback_feature_flag_stops_before_storage_calls() -> None:
     sink = FeedbackSink()
     conversation = FeedbackConversation(

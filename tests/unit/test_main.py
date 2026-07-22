@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from telegram.ext import CallbackQueryHandler, ConversationHandler
+from telegram.ext import CallbackQueryHandler, ConversationHandler, MessageHandler
 
 import app.main as main_module
 from app.config import Settings
@@ -53,6 +53,12 @@ def test_application_wires_conversation_and_job_queue(monkeypatch) -> None:
         if isinstance(handler, CallbackQueryHandler) and hasattr(handler.pattern, "pattern")
     }
     assert {"^trip:", "^d1:"}.issubset(stale_patterns)
+    group_handlers = application.handlers[0]
+    assert group_handlers[0] is conversation_handler
+    assert isinstance(group_handlers[1], MessageHandler)
+    assert not any(
+        isinstance(handler, MessageHandler) for handler in conversation_handler.entry_points
+    )
     assert application.error_handlers
 
 

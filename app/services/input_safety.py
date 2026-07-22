@@ -10,7 +10,6 @@ SENSITIVE_DATA_RESPONSE = (
 )
 
 _PAYMENT_CARD = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
-_CARD_CONTEXT = re.compile(r"\b(?:карт\w*|card|номер\s+карт\w*)\b", re.IGNORECASE)
 _SECURITY_CODE = re.compile(r"\b(?:cvv|cvc|код\s+безопасности)\s*[:=-]?\s*\d{3,4}\b", re.IGNORECASE)
 _PASSPORT = re.compile(
     r"\b(?:паспорт\w*|серия\s+и\s+номер)\b.{0,30}\d(?:[ -]?\d){7,11}\b",
@@ -25,5 +24,7 @@ def contains_sensitive_data(text: str) -> bool:
     return bool(
         _SECURITY_CODE.search(normalized)
         or _PASSPORT.search(normalized)
-        or (_CARD_CONTEXT.search(normalized) and _PAYMENT_CARD.search(normalized))
+        # A card-shaped sequence is sensitive even when the user omits words such as
+        # "карта". Requiring context here let bare payment data reach the generic router.
+        or _PAYMENT_CARD.search(normalized)
     )

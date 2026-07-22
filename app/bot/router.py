@@ -151,6 +151,9 @@ class BotRouter:
         """Give plain text outside an active conversation an explicit next step."""
 
         del context
+        if contains_sensitive_data(update.effective_message.text or ""):
+            await update.effective_message.reply_text(SENSITIVE_DATA_RESPONSE)
+            return
         await update.effective_message.reply_text(
             "Активного диалога нет. Выберите, что хотите сделать:",
             reply_markup=self._route_keyboard(),
@@ -212,7 +215,6 @@ def build_routed_conversation_handler(
                 CommandHandler("newtrip", known.start),
                 CommandHandler("ideas", discovery.start),
                 *common_commands,
-                MessageHandler(text, router.orphan_text),
             ],
             states={
                 RouterState.INTAKE: [

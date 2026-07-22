@@ -7,7 +7,7 @@ import logging
 from contextlib import suppress
 
 from telegram import BotCommand, Update
-from telegram.ext import Application, ContextTypes
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from app.adapters.buffered_analytics import BufferedAnalyticsSink, NullAnalyticsSink
 from app.adapters.clock import SystemClock
@@ -241,6 +241,9 @@ def build_application(settings: Settings) -> Application:
             feedback_conversation,
         )
     )
+    # This recovery handler must stay after ConversationHandler in the same group.
+    # Making it a re-entrant conversation entry point intercepts every active-flow text.
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router.orphan_text))
     application.add_error_handler(handle_update_error)
     return application
 

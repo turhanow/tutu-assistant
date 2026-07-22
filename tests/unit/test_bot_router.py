@@ -219,3 +219,21 @@ async def test_plain_text_after_cancel_gets_explicit_recovery_buttons() -> None:
     reply = incoming.effective_message.reply_text.call_args
     assert "Активного диалога нет" in reply.args[0]
     assert len(reply.kwargs["reply_markup"].inline_keyboard) == 2
+
+
+@pytest.mark.asyncio
+async def test_orphan_payment_data_gets_privacy_warning_instead_of_recovery() -> None:
+    router = BotRouter(
+        Extractor(),  # type: ignore[arg-type]
+        KnownConversation(),  # type: ignore[arg-type]
+        IdeasConversation(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    incoming, _ = update("1111 1111 1111 1111")
+
+    await router.orphan_text(incoming, SimpleNamespace(user_data={}))
+
+    reply = incoming.effective_message.reply_text.call_args
+    assert "Не могу принимать или сохранять платёжные" in reply.args[0]
+    assert "reply_markup" not in reply.kwargs

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from telegram import User
+from telegram.ext import Application, ConversationHandler, MessageHandler, filters
 
 import app.webhook as webhook_module
+from app.bot.conversation import State
+from app.bot.discovery_conversation import DiscoveryState
+from app.bot.router import build_routed_conversation_handler
 from app.config import Settings
 from app.webhook import TELEGRAM_SECRET_HEADER, build_webhook_app, run_webhook
 
@@ -38,6 +44,98 @@ def _transport(application=None, *, secret="webhook_secret") -> httpx.ASGITransp
             max_body_bytes=1_024,
         )
     )
+
+
+class RecordingConversation:
+    def __init__(self, *, start_state: int, intake_state: int) -> None:
+        self.start_state = start_state
+        self.intake_state = intake_state
+        self.calls: list[tuple[str, str]] = []
+
+    def __getattr__(self, name: str):
+        async def callback(update, _context):
+            self.calls.append((name, update.effective_message.text or ""))
+            if name == "start":
+                return self.start_state
+            if name in {"intake", "clarification_input"}:
+                return self.intake_state
+            return ConversationHandler.END
+
+        return callback
+
+
+def _telegram_message(update_id: int, text: str, *, command: bool = False) -> dict:
+    message = {
+        "message_id": update_id,
+        "date": int(datetime.now(UTC).timestamp()),
+        "chat": {"id": 100, "type": "private"},
+        "from": {"id": 42, "is_bot": False, "first_name": "QA"},
+        "text": text,
+    }
+    if command:
+        message["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text)}]
+    return {"update_id": update_id, "message": message}
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings(
+    "ignore:Ignoring `conversation_timeout`:telegram.warnings.PTBUserWarning"
+)
+@pytest.mark.parametrize(
+    ("command", "payload", "flow_name"),
+    [
+        ("/newtrip", "Москва — Казань, 15–17 августа", "known"),
+        ("/ideas", "Куда-нибудь на выходные без суеты", "discovery"),
+    ],
+)
+async def test_webhook_keeps_conversation_state_between_command_and_payload(
+    command: str,
+    payload: str,
+    flow_name: str,
+) -> None:
+    application = Application.builder().token("123456:test-token").build()
+    object.__setattr__(
+        application.bot,
+        "_bot_user",
+        User(id=999, first_name="Bot", is_bot=True, username="test_bot"),
+    )
+    object.__setattr__(application.bot, "_bot_initialized", True)
+    application._initialized = True
+
+    router = RecordingConversation(start_state=10, intake_state=10)
+    known = RecordingConversation(start_state=State.INTAKE, intake_state=State.FORM)
+    discovery = RecordingConversation(
+        start_state=DiscoveryState.INTAKE,
+        intake_state=DiscoveryState.CLARIFY,
+    )
+    feedback = RecordingConversation(start_state=201, intake_state=202)
+    conversation_handler = build_routed_conversation_handler(
+        router,  # type: ignore[arg-type]
+        known,  # type: ignore[arg-type]
+        discovery,  # type: ignore[arg-type]
+        feedback,  # type: ignore[arg-type]
+    )
+    application.add_handler(conversation_handler)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router.orphan_text))
+
+    async with httpx.AsyncClient(
+        transport=_transport(application), base_url="https://test"
+    ) as client:
+        first = await client.post(
+            "/telegram/webhook",
+            json=_telegram_message(1, command, command=True),
+            headers={TELEGRAM_SECRET_HEADER: "webhook_secret"},
+        )
+        second = await client.post(
+            "/telegram/webhook",
+            json=_telegram_message(2, payload),
+            headers={TELEGRAM_SECRET_HEADER: "webhook_secret"},
+        )
+
+    selected = known if flow_name == "known" else discovery
+    assert first.status_code == second.status_code == 200
+    assert selected.calls == [("start", command), ("intake", payload)]
+    assert not any(name == "orphan_text" for name, _ in router.calls)
 
 
 @pytest.mark.asyncio

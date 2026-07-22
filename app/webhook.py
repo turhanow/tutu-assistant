@@ -95,6 +95,7 @@ def build_webhook_app(
     return Starlette(
         routes=[
             Route("/telegram/webhook", telegram_webhook, methods=["POST"]),
+            Route("/health", health, methods=["GET"]),
             Route("/healthz", health, methods=["GET"]),
             Route("/readyz", readiness, methods=["GET"]),
         ]

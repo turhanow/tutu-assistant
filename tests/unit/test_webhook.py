@@ -88,10 +88,12 @@ async def test_webhook_rejects_invalid_or_oversized_payload() -> None:
 @pytest.mark.asyncio
 async def test_operational_endpoints_expose_only_bounded_status() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="https://test") as client:
-        health = await client.get("/healthz")
+        health = await client.get("/health")
+        legacy_health = await client.get("/healthz")
         readiness = await client.get("/readyz")
 
     assert health.json() == {"status": "ok"}
+    assert legacy_health.json() == {"status": "ok"}
     assert readiness.json() == {
         "status": "ok",
         "checks": {"catalog_loaded": True},

@@ -96,6 +96,8 @@ def validate() -> None:
         "TELEGRAM_BOT_TOKEN=telegram-bot-token:1",
         "OPENAI_API_KEY=openai-api-key:1",
         "TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:2",
+        '"$SERVICE_URL/health"',
+        '"$SERVICE_URL/readyz"',
     )
     for contract in cloud_run_contracts:
         if contract not in release:

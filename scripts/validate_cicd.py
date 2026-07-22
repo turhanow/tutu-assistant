@@ -62,6 +62,8 @@ def validate() -> None:
         errors.append("both Docker stages must pin the base image by digest")
     if 'CMD ["python", "-m", "app.main"]' not in dockerfile:
         errors.append("Dockerfile must use the application composition root")
+    if "BOT_TRANSPORT=webhook" not in dockerfile or "EXPOSE 8080" not in dockerfile:
+        errors.append("Dockerfile must expose the Cloud Run webhook runtime")
 
     all_packages = _requirements(ROOT / "requirements.lock")
     runtime_packages = _requirements(ROOT / "requirements.runtime.lock")
@@ -81,6 +83,25 @@ def validate() -> None:
     for contract in release_contracts:
         if contract not in release:
             errors.append(f"release.yml is missing: {contract}")
+    cloud_run_contracts = (
+        "google-github-actions/auth@",
+        "google-github-actions/deploy-cloudrun@",
+        "workload_identity_provider:",
+        "id-token: write",
+        "@${{ needs.publish.outputs.digest }}",
+        "--min-instances=0",
+        "--max-instances=1",
+        "BOT_TRANSPORT=webhook",
+        "FEEDBACK_ENABLED=false",
+        "TELEGRAM_BOT_TOKEN=telegram-bot-token:1",
+        "OPENAI_API_KEY=openai-api-key:1",
+        "TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:1",
+    )
+    for contract in cloud_run_contracts:
+        if contract not in release:
+            errors.append(f"release.yml is missing Cloud Run contract: {contract}")
+    if "credentials_json:" in release:
+        errors.append("release.yml must not use long-lived Google service-account keys")
 
     promote = (WORKFLOWS / "promote.yml").read_text(encoding="utf-8")
     if "environment:" not in promote or "docker buildx imagetools create" not in promote:

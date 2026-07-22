@@ -31,3 +31,4 @@ def test_docker_context_excludes_local_credentials_and_state() -> None:
     assert ".venv" in patterns
     assert ".git" in patterns
     assert "var" in patterns
+    assert "gha-creds-*.json" in patterns

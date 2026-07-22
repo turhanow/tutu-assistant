@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import suppress
 
@@ -35,6 +36,7 @@ from app.services.proposal_builder import GroundedProposalNarration, ProposalBui
 from app.services.readiness import build_readiness_report
 from app.services.trip_handoff import TripHandoffService
 from app.services.trip_planner import TripPlanner
+from app.webhook import run_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -201,18 +203,21 @@ def build_application(settings: Settings) -> Application:
 def main() -> None:
     settings = Settings()
     settings.validate_runtime()
-    configure_logging(
-        settings.log_level,
-        secrets=(
-            settings.require_bot_token().get_secret_value(),
-            settings.require_openai_api_key().get_secret_value(),
-        ),
-    )
+    secrets = [
+        settings.require_bot_token().get_secret_value(),
+        settings.require_openai_api_key().get_secret_value(),
+    ]
+    if settings.telegram_webhook_secret is not None:
+        secrets.append(settings.telegram_webhook_secret.get_secret_value())
+    configure_logging(settings.log_level, secrets=tuple(secrets))
     application = build_application(settings)
-    application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
+    if settings.bot_transport == "webhook":
+        asyncio.run(run_webhook(application, settings))
+    else:
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
 
 
 if __name__ == "__main__":

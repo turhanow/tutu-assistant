@@ -5,6 +5,7 @@
 .agents
 .env
 .env.*
+gha-creds-*.json
 .venv
 __pycache__
 *.py[cod]

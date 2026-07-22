@@ -24,6 +24,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
+    BOT_TRANSPORT=webhook \
+    PORT=8080 \
     DESTINATION_CATALOG_PATH=/app/data/destinations/v1/catalog.json \
     FEEDBACK_DB_PATH=/app/var/feedback.sqlite3
 
@@ -42,5 +44,7 @@ RUN mkdir -p /app/var && chown 10001:10001 /app/var
 USER 10001:10001
 
 VOLUME ["/app/var"]
+
+EXPOSE 8080
 
 CMD ["python", "-m", "app.main"]

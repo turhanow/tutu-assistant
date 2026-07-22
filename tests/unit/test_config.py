@@ -83,3 +83,31 @@ def test_invalid_application_timezone_is_rejected(monkeypatch) -> None:
 
     with pytest.raises(ValidationError, match="IANA timezone"):
         Settings(_env_file=None)
+
+
+def test_webhook_mode_requires_public_url_and_secret(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TRANSPORT", "webhook")
+
+    with pytest.raises(ValidationError, match="PUBLIC_BASE_URL"):
+        Settings(_env_file=None)
+
+
+def test_webhook_configuration_builds_fixed_https_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TRANSPORT", "webhook")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://bot.example.com")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "safe_webhook-secret_123")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.webhook_url == "https://bot.example.com/telegram/webhook"
+    assert "safe_webhook-secret_123" not in repr(settings)
+
+
+@pytest.mark.parametrize("secret", ["contains space", "bad/slash", "x" * 257])
+def test_webhook_secret_rejects_telegram_incompatible_values(monkeypatch, secret) -> None:
+    monkeypatch.setenv("BOT_TRANSPORT", "webhook")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://bot.example.com")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", secret)
+
+    with pytest.raises(ValidationError, match="TELEGRAM_WEBHOOK_SECRET"):
+        Settings(_env_file=None)

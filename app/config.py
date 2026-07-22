@@ -16,11 +16,31 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
         case_sensitive=True,
     )
 
     telegram_bot_token: SecretStr | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
+    bot_transport: Literal["polling", "webhook"] = Field(default="polling", alias="BOT_TRANSPORT")
+    public_base_url: AnyHttpUrl | None = Field(default=None, alias="PUBLIC_BASE_URL")
+    telegram_webhook_secret: SecretStr | None = Field(
+        default=None,
+        alias="TELEGRAM_WEBHOOK_SECRET",
+    )
+    port: int = Field(default=8080, alias="PORT", ge=1, le=65_535)
+    webhook_max_connections: int = Field(
+        default=16,
+        alias="WEBHOOK_MAX_CONNECTIONS",
+        ge=1,
+        le=100,
+    )
+    webhook_max_body_bytes: int = Field(
+        default=1_000_000,
+        alias="WEBHOOK_MAX_BODY_BYTES",
+        ge=1_024,
+        le=4_000_000,
+    )
     tutu_mcp_url: AnyHttpUrl = Field(default="https://mcp.tutu.ru/mcp", alias="TUTU_MCP_URL")
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_base_url: AnyHttpUrl = Field(
@@ -96,7 +116,7 @@ class Settings(BaseSettings):
         default=30, alias="PROVIDER_CIRCUIT_RECOVERY_SECONDS", gt=0, le=600
     )
 
-    @field_validator("tutu_mcp_url", "openai_base_url")
+    @field_validator("tutu_mcp_url", "openai_base_url", "public_base_url")
     @classmethod
     def require_https(cls, value: AnyHttpUrl | None) -> AnyHttpUrl | None:
         if value is not None and value.scheme != "https":
@@ -122,6 +142,26 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_webhook_configuration(self) -> Settings:
+        if self.bot_transport != "webhook":
+            return self
+        if self.public_base_url is None:
+            raise ValueError("PUBLIC_BASE_URL is required when BOT_TRANSPORT=webhook")
+        if self.public_base_url.path not in {"", "/"}:
+            raise ValueError("PUBLIC_BASE_URL must not contain a path")
+        if self.public_base_url.query or self.public_base_url.fragment:
+            raise ValueError("PUBLIC_BASE_URL must not contain a query or fragment")
+        secret = self.require_webhook_secret().get_secret_value()
+        if not 1 <= len(secret) <= 256 or any(
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for character in secret
+        ):
+            raise ValueError(
+                "TELEGRAM_WEBHOOK_SECRET must contain 1-256 characters from A-Z, a-z, 0-9, _ and -"
+            )
+        return self
+
     def require_bot_token(self) -> SecretStr:
         if self.telegram_bot_token is None or not self.telegram_bot_token.get_secret_value():
             raise ValueError("TELEGRAM_BOT_TOKEN is required to start the bot")
@@ -132,7 +172,23 @@ class Settings(BaseSettings):
             raise ValueError("OPENAI_API_KEY is required to start the bot")
         return self.openai_api_key
 
+    def require_webhook_secret(self) -> SecretStr:
+        if (
+            self.telegram_webhook_secret is None
+            or not self.telegram_webhook_secret.get_secret_value()
+        ):
+            raise ValueError("TELEGRAM_WEBHOOK_SECRET is required when BOT_TRANSPORT=webhook")
+        return self.telegram_webhook_secret
+
+    @property
+    def webhook_url(self) -> str:
+        if self.public_base_url is None:
+            raise ValueError("PUBLIC_BASE_URL is required to build the webhook URL")
+        return f"{str(self.public_base_url).rstrip('/')}/telegram/webhook"
+
     def validate_runtime(self) -> None:
-        """Fail closed before polling without exposing credential values."""
+        """Fail closed before starting a transport without exposing credential values."""
         self.require_bot_token()
         self.require_openai_api_key()
+        if self.bot_transport == "webhook":
+            self.require_webhook_secret()

@@ -177,7 +177,7 @@ jobs:
           secrets: |-
             TELEGRAM_BOT_TOKEN=telegram-bot-token:1
             OPENAI_API_KEY=openai-api-key:1
-            TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:1
+            TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:2
           flags: >-
             --service-account=${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
             --min-instances=0

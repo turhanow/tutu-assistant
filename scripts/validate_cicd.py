@@ -95,7 +95,7 @@ def validate() -> None:
         "FEEDBACK_ENABLED=false",
         "TELEGRAM_BOT_TOKEN=telegram-bot-token:1",
         "OPENAI_API_KEY=openai-api-key:1",
-        "TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:1",
+        "TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:2",
     )
     for contract in cloud_run_contracts:
         if contract not in release:

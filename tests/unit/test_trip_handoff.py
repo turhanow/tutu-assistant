@@ -82,6 +82,34 @@ def search_result() -> TripSearchResult:
     )
 
 
+def without_direct_urls(result: TripSearchResult) -> TripSearchResult:
+    option = result.options[0]
+    combination = option.combination
+    return result.model_copy(
+        update={
+            "options": (
+                option.model_copy(
+                    update={
+                        "combination": combination.model_copy(
+                            update={
+                                "outbound": combination.outbound.model_copy(
+                                    update={"provider_url": None}
+                                ),
+                                "return_offer": combination.return_offer.model_copy(
+                                    update={"provider_url": None}
+                                ),
+                                "hotel": combination.hotel.model_copy(
+                                    update={"provider_url": None}
+                                ),
+                            }
+                        )
+                    }
+                ),
+            )
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_details_use_only_local_option_and_component() -> None:
     gateway = FakeGateway()
@@ -105,7 +133,19 @@ async def test_checkout_returns_separate_tutu_links_for_all_components() -> None
         TripComponent.RETURN,
         TripComponent.HOTEL,
     ]
+    assert not gateway.calls
+    assert all(service.is_offer_specific(item) for item in items)
+
+
+@pytest.mark.asyncio
+async def test_checkout_builder_is_used_only_when_offer_has_no_direct_url() -> None:
+    gateway = FakeGateway()
+    service = TripHandoffService(gateway)  # type: ignore[arg-type]
+
+    items = await service.create_checkout_items(without_direct_urls(search_result()), 0)
+
     assert len(gateway.calls) == 3
+    assert all(not service.is_offer_specific(item) for item in items)
 
 
 @pytest.mark.asyncio
@@ -113,7 +153,7 @@ async def test_checkout_rejects_non_tutu_host() -> None:
     service = TripHandoffService(FakeGateway("https://evil.example/checkout"))  # type: ignore[arg-type]
 
     with pytest.raises(CheckoutError, match="non-Tutu"):
-        await service.create_checkout_items(search_result(), 0)
+        await service.create_checkout_items(without_direct_urls(search_result()), 0)
 
 
 @pytest.mark.asyncio

@@ -206,6 +206,30 @@ async def test_reported_relaxed_weekend_request_preserves_every_explicit_constra
 
 
 @pytest.mark.asyncio
+async def test_explicit_discovery_dates_override_reversed_model_dates() -> None:
+    client = FakeClient(
+        [
+            extraction(
+                departure_date=date(2026, 8, 30),
+                return_date=date(2026, 8, 29),
+                hotel_mode=ExtractedHotelMode.REQUIRED,
+                motives=["прогулки"],
+            )
+        ]
+    )
+    adapter = OpenAIIntentExtractor(client)  # type: ignore[arg-type]
+
+    result = await adapter.extract(
+        "Из Москвы куда-нибудь 29–30 августа 2026, нужны прогулки и отель",
+        context=context(),
+    )
+
+    assert result.discovery_draft is not None
+    assert result.discovery_draft.departure_date == date(2026, 8, 29)
+    assert result.discovery_draft.return_date == date(2026, 8, 30)
+
+
+@pytest.mark.asyncio
 async def test_explicit_relaxed_wording_is_preserved_even_if_model_omits_pace() -> None:
     client = FakeClient(
         [

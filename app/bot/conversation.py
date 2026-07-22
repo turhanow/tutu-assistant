@@ -276,6 +276,18 @@ class TripConversation:
                 + "\nУточните условия без взаимоисключающих вариантов."
             )
             return State.FORM
+        try:
+            direct_draft = apply_form_answer(
+                draft,
+                field,
+                source_text,
+                today=self._clock.now().date(),
+            )
+        except DraftInputError:
+            direct_draft = None
+        if direct_draft is not None:
+            context.user_data[_DRAFT] = direct_draft
+            return await self._continue_or_confirm(message, context)
         parse = getattr(self._parser, "parse", None)
         if callable(parse):
             try:
@@ -430,16 +442,30 @@ class TripConversation:
                 buttons = [
                     [
                         InlineKeyboardButton(
-                            f"Перейти: {COMPONENT_LABELS[item.component]}",
+                            (
+                                f"Открыть выбранное: {COMPONENT_LABELS[item.component]}"
+                                if TripHandoffService.is_offer_specific(item)
+                                else f"Смотреть все: {COMPONENT_LABELS[item.component]}"
+                            ),
                             url=str(item.link.url),
                         )
                     ]
                     for item in items
                 ]
+                has_broad_link = any(
+                    not TripHandoffService.is_offer_specific(item) for item in items
+                )
+                link_scope = (
+                    " Для кнопок «Смотреть все» Tutu не вернул ссылку на конкретное "
+                    "предложение: откроется список на выбранную дату."
+                    if has_broad_link
+                    else " Каждая кнопка открывает выбранное предложение."
+                )
                 await status.edit_text(
                     "Вы перейдёте на Tutu для проверки актуальной цены и оформления. "
                     "Транспорт и отель могут оформляться отдельно; переход по ссылке "
-                    "не резервирует места, а стоимость и доступность могут измениться.",
+                    "не резервирует места, а стоимость и доступность могут измениться."
+                    + link_scope,
                     reply_markup=InlineKeyboardMarkup(buttons),
                 )
                 await self._track(

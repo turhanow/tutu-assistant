@@ -85,6 +85,31 @@ def test_confirmed_sort_preference_controls_first_unique_card() -> None:
     assert ranked[0].combination.signature == "fast"
 
 
+def test_ranking_fills_three_distinct_cards_when_one_option_wins_all_labels() -> None:
+    combinations = [
+        _combination(
+            f"option-{index}",
+            outbound_departure=datetime(2026, 8, 21, 8 + index, tzinfo=UTC),
+            outbound_hours=2 + index,
+            return_departure=datetime(2026, 8, 22, 16 + index, tzinfo=UTC),
+            return_hours=2 + index,
+            price=Decimal(1000 + index * 500),
+        )
+        for index in range(4)
+    ]
+
+    ranked = rank_options(combinations)
+
+    assert len(ranked) == 3
+    assert len({item.combination.signature for item in ranked}) == 3
+    assert ranked[0].labels == {
+        SortPreference.CHEAPEST,
+        SortPreference.FASTEST,
+        SortPreference.BALANCED,
+    }
+    assert not ranked[1].labels
+
+
 def _combination(
     signature: str,
     *,

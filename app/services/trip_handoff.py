@@ -64,12 +64,15 @@ class TripHandoffService:
         component: TripComponent,
     ) -> TripCheckoutItem | None:
         offer = self._offer(result, index, component)
-        try:
-            link = await self._gateway.create_checkout_link(offer.offer_ref)
-        except ProviderError:
-            if offer.provider_url is None:
+        if offer.provider_url is not None:
+            # Search responses already carry the most specific URL for this exact offer.
+            # Prefer it over rebuilding a URL that may degrade to a day-level listing.
+            link = CheckoutLink(url=offer.provider_url, kind="direct_offer")
+        else:
+            try:
+                link = await self._gateway.create_checkout_link(offer.offer_ref)
+            except ProviderError:
                 return None
-            link = CheckoutLink(url=offer.provider_url)
         self._require_tutu_host(link)
         return TripCheckoutItem(component=component, link=link)
 
@@ -78,6 +81,10 @@ class TripHandoffService:
         if index < 0 or index >= len(result.options):
             raise CheckoutError("trip option is missing or stale")
         return result.options[index].combination
+
+    @staticmethod
+    def is_offer_specific(item: TripCheckoutItem) -> bool:
+        return item.link.kind in {"direct_offer", "deeplink", "checkout_deeplink"}
 
     def _offer(
         self,

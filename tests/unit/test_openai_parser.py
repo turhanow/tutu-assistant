@@ -132,6 +132,28 @@ async def test_explicit_party_text_overrides_silent_model_truncation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_explicit_date_range_overrides_wrong_model_dates() -> None:
+    client = FakeClient(
+        [
+            extraction(
+                departure_date=date(2026, 8, 30),
+                return_date=date(2026, 8, 29),
+            )
+        ]
+    )
+    parser = OpenAIRequestParser(client)  # type: ignore[arg-type]
+
+    result = await parser.parse(
+        "Москва — Казань, 29–30 августа 2026",
+        now=datetime(2026, 7, 22, tzinfo=UTC),
+        timezone="Europe/Moscow",
+    )
+
+    assert result.draft.departure_date == date(2026, 8, 29)
+    assert result.draft.return_date == date(2026, 8, 30)
+
+
+@pytest.mark.asyncio
 async def test_unparseable_response_gets_exactly_one_repair_retry() -> None:
     client = FakeClient([None, extraction(origin=None)])
     parser = OpenAIRequestParser(client)  # type: ignore[arg-type]

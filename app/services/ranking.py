@@ -69,10 +69,20 @@ def rank_options(
         winner = winners[label]
         if winner is not None and winner not in ordered:
             ordered.append(winner)
+    # Category winners can collapse to one combination. Keep their labels, then fill
+    # remaining cards with the next best distinct balanced options so users can compare.
+    for candidate in sorted(
+        combinations,
+        key=lambda item: (scores[item.signature], *_tie_key(item)),
+    ):
+        if candidate not in ordered:
+            ordered.append(candidate)
+        if len(ordered) == 3:
+            break
     return [
         RankedTripOption(
             combination=item,
-            labels=frozenset(labels[item.signature]),
+            labels=frozenset(labels.get(item.signature, set())),
             balance_score=scores[item.signature],
         )
         for item in ordered[:3]

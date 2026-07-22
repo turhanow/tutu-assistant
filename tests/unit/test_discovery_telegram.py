@@ -277,6 +277,29 @@ async def test_missing_fields_are_asked_in_one_bounded_batch_then_merged() -> No
 
 
 @pytest.mark.asyncio
+async def test_date_follow_up_is_applied_immediately_without_second_llm_call() -> None:
+    incomplete = complete_draft(departure_date=None, return_date=None)
+    service, extractor, selector, *_ = conversation(parsed(incomplete))
+    context = SimpleNamespace(user_data={})
+    incoming, _ = telegram_message("Хочу спокойные выходные")
+
+    state = await service.intake(telegram_update(incoming), context)
+
+    assert state is DiscoveryState.CLARIFY
+    assert context.user_data["discovery_pending_field"] == "dates"
+    answer, _ = telegram_message("29–30 августа 2026")
+    state = await service.clarification_input(telegram_update(answer), context)
+
+    assert state is DiscoveryState.RESULTS
+    assert len(extractor.calls) == 1
+    assert len(selector.calls) == 1
+    request = selector.calls[0]
+    assert request.dates.start == date(2026, 8, 29)
+    assert request.dates.end == date(2026, 8, 30)
+    assert "discovery_pending_field" not in context.user_data
+
+
+@pytest.mark.asyncio
 async def test_mapping_failure_is_reported_as_technical_not_as_bad_user_input() -> None:
     service, *_ = conversation(LlmParseError("invalid confidence"))
     context = SimpleNamespace(user_data={})

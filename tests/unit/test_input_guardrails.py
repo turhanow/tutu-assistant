@@ -5,6 +5,7 @@ import pytest
 from app.services.input_safety import contains_sensitive_data
 from app.services.known_input_guardrails import (
     explicit_conflicts,
+    extract_explicit_date_range,
     normalize_city_answer,
     recover_known_draft,
 )
@@ -50,6 +51,18 @@ def test_recovery_preserves_route_and_labelled_reversed_dates() -> None:
     assert draft.destination == "Казань"
     assert draft.departure_date == date(2026, 8, 12)
     assert draft.return_date == date(2026, 8, 10)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("29–30 августа", (date(2026, 8, 29), date(2026, 8, 30))),
+        ("29-30.08.2026", (date(2026, 8, 29), date(2026, 8, 30))),
+        ("31 декабря — 2 января", (date(2026, 12, 31), date(2027, 1, 2))),
+    ],
+)
+def test_explicit_date_range_preserves_user_order(text: str, expected) -> None:
+    assert extract_explicit_date_range(text, today=date(2026, 7, 22)) == expected
 
 
 def test_explicit_transport_and_hotel_contradictions_are_named() -> None:

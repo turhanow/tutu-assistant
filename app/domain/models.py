@@ -323,6 +323,7 @@ class CheckoutLink(DomainModel):
     url: AnyHttpUrl
     fallback_url: AnyHttpUrl | None = None
     expires_at: datetime | None = None
+    kind: str | None = Field(default=None, max_length=50)
 
     @field_validator("url", "fallback_url")
     @classmethod

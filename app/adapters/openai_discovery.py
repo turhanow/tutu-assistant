@@ -33,6 +33,7 @@ from app.services.explicit_constraints import (
     explicitly_relaxed,
     extract_explicit_party,
 )
+from app.services.known_input_guardrails import extract_explicit_trip_dates
 from app.voice import FORBIDDEN_SLANG
 
 MAX_INPUT_LENGTH = 2_000
@@ -162,7 +163,11 @@ class OpenAIIntentExtractor:
                     )
                     if isinstance(response, IntentExtraction):
                         try:
-                            return _map_intent(response, source_text=normalized)
+                            return _map_intent(
+                                response,
+                                source_text=normalized,
+                                today=date.fromisoformat(context.current_date),
+                            )
                         except (ValidationError, ValueError, InvalidOperation):
                             pass
                     if attempt == 0:
@@ -266,7 +271,12 @@ class OpenAIProposalNarrator:
         return response.output_parsed
 
 
-def _map_intent(value: IntentExtraction, *, source_text: str = "") -> IntentParseResult:
+def _map_intent(
+    value: IntentExtraction,
+    *,
+    source_text: str = "",
+    today: date | None = None,
+) -> IntentParseResult:
     intent = TripIntent(value.intent.value)
     confidence = Decimal(str(value.confidence))
     budget = _optional_money(value.max_total_budget)
@@ -276,6 +286,9 @@ def _map_intent(value: IntentExtraction, *, source_text: str = "") -> IntentPars
         HotelMode(value.hotel_mode.value) if value.hotel_mode else None
     )
     party = extract_explicit_party(source_text)
+    explicit_dates = (
+        extract_explicit_trip_dates(source_text, today=today) if today is not None else (None, None)
+    )
     normalized_experience = {
         item.strip().casefold().replace("ё", "е") for item in (*value.motives, *value.interests)
     }
@@ -298,8 +311,8 @@ def _map_intent(value: IntentExtraction, *, source_text: str = "") -> IntentPars
         known_draft = ParsedTripDraft(
             origin=value.origin,
             destination=value.destination,
-            departure_date=value.departure_date,
-            return_date=value.return_date,
+            departure_date=explicit_dates[0] or value.departure_date,
+            return_date=explicit_dates[1] or value.return_date,
             adults=party.adults if party.adults is not None else value.adults,
             children=party.children if party.children is not None else value.children,
             rooms=party.rooms if party.rooms is not None else value.rooms,
@@ -315,8 +328,8 @@ def _map_intent(value: IntentExtraction, *, source_text: str = "") -> IntentPars
     else:
         discovery_draft = DiscoveryDraft(
             origin=value.origin,
-            departure_date=value.departure_date,
-            return_date=value.return_date,
+            departure_date=explicit_dates[0] or value.departure_date,
+            return_date=explicit_dates[1] or value.return_date,
             date_flexibility=(
                 DateFlexibility(value.date_flexibility.value) if value.date_flexibility else None
             ),

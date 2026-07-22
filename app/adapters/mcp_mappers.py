@@ -98,7 +98,9 @@ def map_transport_search(payload: dict[str, Any]) -> list[TransportOffer]:
                     price=price,
                     currency=currency,
                     transfers=_transfers(row),
-                    provider_url=row.get("checkout_url") or row.get("search_results_url"),
+                    # search_results_url is not an offer-specific handoff and must not be
+                    # presented as if it opens the recommended ticket.
+                    provider_url=row.get("checkout_url"),
                     offer_ref=OfferRef(
                         product_type=str(checkout_ref.get("transport") or row.get("transport")),
                         checkout_data=checkout_ref,
@@ -168,6 +170,7 @@ def map_checkout_link(payload: dict[str, Any]) -> CheckoutLink:
         return CheckoutLink(
             url=payload.get("checkout_url"),
             fallback_url=payload.get("fallback_url"),
+            kind=payload.get("kind"),
         )
     except ValidationError as error:
         raise ProviderResponseError("provider returned an invalid checkout link") from error

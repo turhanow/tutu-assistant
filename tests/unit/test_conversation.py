@@ -137,9 +137,7 @@ async def test_natural_language_always_calls_parser_and_mcp_waits_for_confirmati
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_form_keeps_deterministic_fallback_when_patch_llm_is_unavailable() -> (
-    None
-):
+async def test_short_form_followups_skip_llm_and_complete_deterministically() -> None:
     parser = FailingParser()
     planner = FakePlanner()
     conversation = TripConversation(
@@ -160,7 +158,7 @@ async def test_llm_failure_form_keeps_deterministic_fallback_when_patch_llm_is_u
         )
 
     assert state is State.CONFIRM
-    assert len(parser.calls) == 6
+    assert len(parser.calls) == 1
     assert not planner.calls
 
 

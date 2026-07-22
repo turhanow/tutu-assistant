@@ -20,6 +20,7 @@ from app.domain.models import (
     TransportMode,
 )
 from app.services.explicit_constraints import explicit_hotel_mode, extract_explicit_party
+from app.services.known_input_guardrails import extract_explicit_trip_dates
 
 MAX_INPUT_LENGTH = 2_000
 SYSTEM_INSTRUCTIONS = """You extract short-trip parameters from Russian user text.
@@ -147,7 +148,11 @@ class OpenAIRequestParser:
                         raise LlmProviderError("OpenAI request failed") from error
                     extracted = response.output_parsed
                     if isinstance(extracted, TripExtraction):
-                        return self._to_result(extracted, source_text=normalized)
+                        return self._to_result(
+                            extracted,
+                            source_text=normalized,
+                            today=now.date(),
+                        )
                     if attempt == 0:
                         instructions += (
                             "\nPrevious response was not parseable. Return a schema-valid object."
@@ -157,17 +162,27 @@ class OpenAIRequestParser:
         raise LlmParseError("OpenAI returned no parseable trip extraction")
 
     @staticmethod
-    def _to_result(value: TripExtraction, *, source_text: str = "") -> ParseResult:
+    def _to_result(
+        value: TripExtraction,
+        *,
+        source_text: str = "",
+        today: date | None = None,
+    ) -> ParseResult:
         budget = _budget(value.max_total_budget)
         currency = (value.currency or "RUB").upper()
         party = extract_explicit_party(source_text)
         hotel_mode = explicit_hotel_mode(source_text)
+        explicit_dates = (
+            extract_explicit_trip_dates(source_text, today=today)
+            if today is not None
+            else (None, None)
+        )
         try:
             draft = ParsedTripDraft(
                 origin=value.origin,
                 destination=value.destination,
-                departure_date=value.departure_date,
-                return_date=value.return_date,
+                departure_date=explicit_dates[0] or value.departure_date,
+                return_date=explicit_dates[1] or value.return_date,
                 adults=party.adults if party.adults is not None else value.adults,
                 children=party.children if party.children is not None else value.children,
                 rooms=party.rooms if party.rooms is not None else value.rooms,

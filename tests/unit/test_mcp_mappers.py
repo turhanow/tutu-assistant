@@ -60,6 +60,7 @@ def test_maps_live_hotel_fixture_as_whole_stay_price() -> None:
 def test_maps_live_checkout_fixture() -> None:
     checkout = map_checkout_link(fixture("checkout-link.json"))
     assert str(checkout.url) == "https://www.tutu.ru/fixture"
+    assert checkout.kind == "deeplink"
 
 
 def test_maps_live_hotel_details_without_raw_payload() -> None:

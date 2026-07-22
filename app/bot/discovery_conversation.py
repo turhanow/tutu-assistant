@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+from datetime import date
 from enum import IntEnum
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -37,7 +38,7 @@ from app.domain.errors import (
     TutuAssistantError,
     UnsupportedOriginError,
 )
-from app.domain.models import HotelMode, TripSearchResult
+from app.domain.models import HotelMode, ParsedTripDraft, TripSearchResult
 from app.ports.clock import Clock
 from app.ports.discovery_llm import ConversationContext, IntentExtractor
 from app.services.candidate_selector import CandidateSelector
@@ -49,6 +50,7 @@ from app.services.discovery_request_builder import (
     missing_discovery_fields,
 )
 from app.services.input_safety import SENSITIVE_DATA_RESPONSE, contains_sensitive_data
+from app.services.known_input_guardrails import extract_explicit_date_range
 from app.services.product_analytics import ProductAnalytics
 from app.services.proposal_builder import (
     GroundedProposalNarration,
@@ -56,6 +58,7 @@ from app.services.proposal_builder import (
     fallback_proposal_copies,
     project_grounded_facts,
 )
+from app.services.request_builder import DraftInputError, apply_form_answer
 from app.services.trip_handoff import TripHandoffService
 from app.voice import Voice
 
@@ -68,6 +71,7 @@ _SHORTLIST = "discovery_shortlist"
 _FEASIBILITY = "discovery_feasibility"
 _PROPOSALS = "discovery_proposals"
 _REJECTED_INDEX = "discovery_rejected_index"
+_PENDING_FIELD = "discovery_pending_field"
 _ANALYTICS_FLOW_ID = "flow_id"
 _INTENT_TRACKED = "intent_analytics_tracked"
 _REJECT_REASONS = frozenset({"too_expensive", "bad_logistics", "uninteresting", "other"})
@@ -203,6 +207,31 @@ class DiscoveryConversation:
         if contains_sensitive_data(message.text or ""):
             await message.reply_text(SENSITIVE_DATA_RESPONSE)
             return DiscoveryState.CLARIFY
+        current = context.user_data.get(_DRAFT)
+        field = context.user_data.get(_PENDING_FIELD)
+        if not isinstance(current, DiscoveryDraft) or not isinstance(field, str):
+            await message.reply_text("Контекст вопроса устарел. Начните подбор заново: /ideas")
+            return ConversationHandler.END
+        try:
+            deterministic = _apply_deterministic_clarification(
+                current,
+                field,
+                message.text or "",
+                today=self._clock.now().date(),
+            )
+        except DiscoveryInputError as error:
+            await message.reply_text(str(error))
+            return DiscoveryState.CLARIFY
+        if deterministic is not None:
+            context.user_data[_DRAFT] = deterministic
+            context.user_data.pop(_PENDING_FIELD, None)
+            await self._track(
+                "clarification_answered",
+                context,
+                dimensions={"flow_type": "destination_unknown"},
+            )
+            await message.reply_text("Принял. Продолжаю подбор.")
+            return await self._continue(message, context)
         progress = await message.reply_text(
             self._voice.progress("discovery_clarify", context.user_data)
         )
@@ -223,11 +252,16 @@ class DiscoveryConversation:
             )
             return DiscoveryState.CLARIFY
         patch = parsed.discovery_draft
-        current = context.user_data.get(_DRAFT)
         if patch is None or not isinstance(current, DiscoveryDraft):
             await progress.edit_text("Не получилось связать ответы с запросом. Попробуйте ещё раз.")
             return DiscoveryState.CLARIFY
-        context.user_data[_DRAFT] = _merge_discovery_drafts(current, patch)
+        merged = _merge_discovery_drafts(current, patch)
+        if field in missing_discovery_fields(merged):
+            question = plan_clarifications(merged, limit=1)[0]
+            await progress.edit_text("Не получилось связать ответ с вопросом. " + question.text)
+            return DiscoveryState.CLARIFY
+        context.user_data[_DRAFT] = merged
+        context.user_data.pop(_PENDING_FIELD, None)
         await self._track(
             "clarification_answered",
             context,
@@ -396,6 +430,7 @@ class DiscoveryConversation:
         missing = missing_discovery_fields(draft)
         if missing:
             question = plan_clarifications(draft, limit=1)[0]
+            context.user_data[_PENDING_FIELD] = question.field
             await self._track(
                 "clarification_shown",
                 context,
@@ -403,6 +438,7 @@ class DiscoveryConversation:
             )
             await message.reply_text(question.text)
             return DiscoveryState.CLARIFY
+        context.user_data.pop(_PENDING_FIELD, None)
         try:
             request = build_discovery_request(draft, today=self._clock.now().date())
         except DiscoveryInputError as error:
@@ -571,15 +607,26 @@ class DiscoveryConversation:
         buttons = [
             [
                 InlineKeyboardButton(
-                    f"Открыть на Tutu · {COMPONENT_LABELS[item.component]}",
+                    (
+                        f"Открыть выбранное · {COMPONENT_LABELS[item.component]}"
+                        if TripHandoffService.is_offer_specific(item)
+                        else f"Смотреть все · {COMPONENT_LABELS[item.component]}"
+                    ),
                     url=str(item.link.url),
                 )
             ]
             for item in items
         ]
+        has_broad_link = any(not TripHandoffService.is_offer_specific(item) for item in items)
+        link_scope = (
+            " Для кнопок «Смотреть все» откроется список на выбранную дату, потому что "
+            "Tutu не вернул прямую ссылку на конкретное предложение."
+            if has_broad_link
+            else " Каждая кнопка открывает выбранное предложение."
+        )
         await status.edit_text(
             "Проверьте актуальную цену и условия на Tutu. Компоненты могут оформляться "
-            "отдельно; переход не резервирует места.",
+            "отдельно; переход не резервирует места." + link_scope,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         await self._track(
@@ -784,6 +831,39 @@ def _merge_discovery_drafts(current: DiscoveryDraft, patch: DiscoveryDraft) -> D
         ),
     )
     return DiscoveryDraft.model_validate(values)
+
+
+def _apply_deterministic_clarification(
+    draft: DiscoveryDraft,
+    field: str,
+    raw_value: str,
+    *,
+    today: date,
+) -> DiscoveryDraft | None:
+    """Handle short factual follow-ups without a slow or context-free LLM round trip."""
+
+    if field == "dates":
+        explicit = extract_explicit_date_range(raw_value, today=today)
+        if explicit is None:
+            raise DiscoveryInputError(
+                "Укажите обе даты, например «29–30 августа 2026».",
+                "dates",
+            )
+        return draft.model_copy(update={"departure_date": explicit[0], "return_date": explicit[1]})
+    if field in {"origin", "hotel_mode"}:
+        try:
+            parsed = apply_form_answer(
+                ParsedTripDraft(),
+                field,
+                raw_value,
+                today=today,
+            )
+        except DraftInputError:
+            # A multi-field natural-language answer is still valid; let the contextual
+            # extractor merge it rather than rejecting it as a single-field value.
+            return None
+        return draft.model_copy(update={field: getattr(parsed, field)})
+    return None
 
 
 def _price_completeness(result: DiscoveryProposalResult) -> str:

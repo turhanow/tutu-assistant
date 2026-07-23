@@ -354,10 +354,16 @@ class ItineraryBuilder:
         evidence = {item.evidence_id: item for item in content.evidence}
         eligible: list[Activity] = []
         invalid: list[str] = []
+        seen_names: set[str] = set()
         for activity in content.activities:
+            normalized_name = " ".join(activity.name.casefold().replace("ё", "е").split())
+            if normalized_name in seen_names:
+                invalid.append(activity.activity_id)
+                continue
             sources = (evidence[evidence_id] for evidence_id in activity.evidence_ids)
             if all(source.is_fresh_at(verified_at) for source in sources):
                 eligible.append(activity)
+                seen_names.add(normalized_name)
             else:
                 invalid.append(activity.activity_id)
         return eligible, tuple(invalid)

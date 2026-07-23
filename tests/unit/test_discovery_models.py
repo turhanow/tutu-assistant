@@ -304,6 +304,31 @@ def test_complete_proposal_requires_two_anchor_activities() -> None:
     assert not proposal.content_complete
 
 
+def test_proposal_rejects_same_place_repeated_across_trip_days() -> None:
+    candidate = DestinationCandidate(
+        destination=destination(),
+        match_score="0.85",
+        match_reasons=("Архитектура соответствует интересам",),
+    )
+    first = activity("place_one", name="Нижегородский кремль")
+    duplicate = activity("place_alias", name="  нижегородский   кремль ")
+
+    with pytest.raises(ValidationError, match="cannot be repeated"):
+        WeekendProposal(
+            candidate=candidate,
+            trip_option=trip_option(),
+            days=(
+                DayPlan(date=date(2026, 8, 22), suggestions=(first,)),
+                DayPlan(date=date(2026, 8, 23), suggestions=(duplicate,)),
+            ),
+            cost=CostBreakdown(confirmed_total="2000", confirmed_currency="RUB"),
+            verified_at=NOW,
+            evidence_ids={"source_1"},
+            trade_off="Часы работы нужно проверить перед поездкой",
+            content_complete=False,
+        )
+
+
 def test_product_events_and_feedback_are_privacy_bounded() -> None:
     event = ProductEvent(
         name="intent_classified",

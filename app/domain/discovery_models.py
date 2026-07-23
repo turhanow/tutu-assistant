@@ -305,6 +305,22 @@ class WeekendProposal(DomainModel):
             raise ValueError("AI-generated proposal cannot claim evidence")
         if not self.suggested_activities and activity_count == 0:
             raise ValueError("proposal requires at least one activity suggestion")
+        planned = [
+            activity
+            for day in self.days
+            for activity in (
+                *(item.activity for item in day.activities),
+                *day.suggestions,
+            )
+        ]
+        planned_ids = [item.activity_id for item in planned]
+        planned_names = [
+            " ".join(item.name.casefold().replace("ё", "е").split()) for item in planned
+        ]
+        if len(planned_ids) != len(set(planned_ids)) or len(planned_names) != len(
+            set(planned_names)
+        ):
+            raise ValueError("a place cannot be repeated within one trip plan")
         signatures = [item.combination.signature for item in self.trip_alternatives]
         if len(signatures) != len(set(signatures)):
             raise ValueError("trip alternatives must be unique")

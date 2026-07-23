@@ -170,7 +170,12 @@ class OpenAIDestinationDiscovery:
     def _map_destination(self, item: DiscoveredDestination) -> DestinationContent:
         destination_id = _content_id("city", item.name.casefold())
         activities: list[Activity] = []
+        seen_activity_names: set[str] = set()
         for activity in item.activities:
+            normalized_name = " ".join(activity.name.casefold().replace("ё", "е").split())
+            if normalized_name in seen_activity_names:
+                continue
+            seen_activity_names.add(normalized_name)
             activities.append(
                 Activity(
                     activity_id=_content_id(
@@ -254,8 +259,19 @@ def _activity_description(categories: list[str], duration_minutes: int) -> str:
 
 
 def _destination_descriptions(item: DiscoveredDestination) -> tuple[str, str]:
-    names = [activity.name for activity in item.activities]
-    short = f"Поездка ради {names[0]} и {names[1]}."
+    names: list[str] = []
+    seen: set[str] = set()
+    for activity in item.activities:
+        normalized = " ".join(activity.name.casefold().replace("ё", "е").split())
+        if normalized in seen:
+            continue
+        names.append(activity.name)
+        seen.add(normalized)
+    short = (
+        f"В программе — {names[0]} и {names[1]}."
+        if len(names) >= 2
+        else f"В программе — {names[0]}."
+    )
     full = (
         f"{item.name} подходит под выбранные интересы и темп. "
         f"Основу программы составят: {', '.join(names[:4])}."

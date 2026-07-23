@@ -113,7 +113,7 @@ async def test_dynamic_catalog_uses_structured_output_and_caches_ai_content() ->
         "Музей 0",
         "Набережная 0",
     )
-    assert profiles[0].short_description == ("Поездка ради Исторический центр 0 и Музей 0.")
+    assert profiles[0].short_description == ("В программе — Исторический центр 0 и Музей 0.")
     assert "Набережная 0" in (profiles[0].full_description or "")
     assert profiles[0].taxi_available is True
     assert content.is_ai_generated is True
@@ -123,6 +123,21 @@ async def test_dynamic_catalog_uses_structured_output_and_caches_ai_content() ->
     assert "%D0%93%D0%BE%D1%80%D0%BE%D0%B4%200" in str(content.activities[0].map_url)
     assert content.activities[1].map_url is not None
     assert content.activities[0].description == ("Знакомство с историей; ориентировочно 2 ч.")
+
+
+def test_dynamic_catalog_deduplicates_same_place_spelling_variants() -> None:
+    parsed = batch()
+    parsed.destinations[0].activities[1].name = "  исторический   центр 0 "
+    catalog = OpenAIDestinationDiscovery(
+        FakeClient(FakeResponses(parsed)),  # type: ignore[arg-type]
+        FakeClock(),
+    )
+
+    content = catalog._map_destination(parsed.destinations[0])
+
+    normalized = [" ".join(item.name.casefold().split()) for item in content.activities]
+    assert len(normalized) == len(set(normalized))
+    assert content.destination.short_description.count("Исторический центр 0") == 1
 
 
 def test_yandex_query_does_not_repeat_city_already_present_in_address() -> None:

@@ -440,7 +440,8 @@ class DiscoveryConversation:
             context.user_data.pop(_REJECTED_INDEX, None)
             await query.message.reply_text(
                 "Спасибо, учту причину в следующей итерации. Чтобы изменить подборку, "
-                "нажмите «Уточнить пожелания»."
+                "нажмите «Уточнить пожелания».",
+                reply_markup=self._result_controls_keyboard(context),
             )
             return DiscoveryState.RESULTS
         if callback.action is DiscoveryAction.HANDOFF:
@@ -829,6 +830,12 @@ class DiscoveryConversation:
                 ],
                 [
                     InlineKeyboardButton(
+                        "Уточнить пожелания",
+                        callback_data=self._callback(context, DiscoveryAction.REFINE),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
                         "Начать заново",
                         callback_data=self._callback(context, DiscoveryAction.NEW),
                     )
@@ -843,7 +850,7 @@ class DiscoveryConversation:
         return [
             [
                 InlineKeyboardButton(
-                    "Изменить пожелания",
+                    "Уточнить пожелания",
                     callback_data=self._callback(context, DiscoveryAction.REFINE),
                 ),
                 InlineKeyboardButton(
@@ -1006,10 +1013,9 @@ def _apply_deterministic_clarification(
     if field == "dates":
         explicit = extract_explicit_date_range(raw_value, today=today)
         if explicit is None:
-            raise DiscoveryInputError(
-                "Укажите обе даты, например «29–30 августа 2026».",
-                "dates",
-            )
+            # Free-form date answers are intentionally delegated to the contextual
+            # LLM extractor when deterministic parsing has no result.
+            return None
         return draft.model_copy(update={"departure_date": explicit[0], "return_date": explicit[1]})
     if field in {"origin", "hotel_mode"}:
         try:

@@ -167,9 +167,9 @@ class FileTravelContentGateway:
 
 
 def _decorate_profile(content: DestinationContent) -> DestinationProfile:
-    names = tuple(activity.name for activity in content.activities[:4])
+    names = tuple(dict.fromkeys(activity.name for activity in content.activities))[:4]
     short = (
-        f"Поездка ради {names[0]} и {names[1]}."
+        f"В программе — {names[0]} и {names[1]}."
         if len(names) >= 2
         else "Короткая поездка с программой под ваши интересы."
     )

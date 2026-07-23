@@ -174,6 +174,24 @@ def extract_explicit_date_range(text: str, *, today: date) -> tuple[date, date] 
     if _requests_nearest_weekend(normalized):
         return nearest_weekend(today)
 
+    shared_month = re.search(
+        rf"(?<!\d)(?:с\s+)?(?P<first>\d{{1,2}})\s*(?:по|и)\s*"
+        rf"(?P<second>\d{{1,2}})\s+(?P<month>{_MONTH_PATTERN})\.?(?:\s+"
+        rf"(?P<year>20\d{{2}}))?",
+        normalized,
+    )
+    if shared_month is not None:
+        year = int(shared_month.group("year") or today.year)
+        month = _MONTHS[shared_month.group("month")]
+        departure = _safe_date(year, month, int(shared_month.group("first")))
+        returning = _safe_date(year, month, int(shared_month.group("second")))
+        if departure is None or returning is None:
+            return None
+        if shared_month.group("year") is None and departure < today:
+            departure = departure.replace(year=year + 1)
+            returning = returning.replace(year=year + 1)
+        return departure, returning
+
     same_month = re.search(
         rf"(?<!\d)(?P<first>\d{{1,2}})\s*[—–-]\s*(?P<second>\d{{1,2}})\s+"
         rf"(?P<month>{_MONTH_PATTERN})\.?(?:\s+(?P<year>20\d{{2}}))?",
@@ -190,6 +208,29 @@ def extract_explicit_date_range(text: str, *, today: date) -> tuple[date, date] 
             departure = departure.replace(year=year + 1)
             returning = returning.replace(year=year + 1)
         return departure, returning
+
+    full_numeric = re.search(
+        r"(?<!\d)(?P<first>\d{1,2})[./](?P<first_month>\d{1,2})"
+        r"(?:[./](?P<first_year>20\d{2}))?\s*[—–-]\s*"
+        r"(?P<second>\d{1,2})[./](?P<second_month>\d{1,2})"
+        r"(?:[./](?P<second_year>20\d{2}))?(?!\d)",
+        normalized,
+    )
+    if full_numeric is not None:
+        first_year = int(full_numeric.group("first_year") or today.year)
+        first_month = int(full_numeric.group("first_month"))
+        second_month = int(full_numeric.group("second_month"))
+        departure = _safe_date(first_year, first_month, int(full_numeric.group("first")))
+        if departure is None:
+            return None
+        if full_numeric.group("first_year") is None and departure < today:
+            first_year += 1
+            departure = departure.replace(year=first_year)
+        second_year = int(full_numeric.group("second_year") or first_year)
+        if full_numeric.group("second_year") is None and second_month < first_month:
+            second_year += 1
+        returning = _safe_date(second_year, second_month, int(full_numeric.group("second")))
+        return (departure, returning) if returning is not None else None
 
     numeric = re.search(
         r"(?<!\d)(?P<first>\d{1,2})\s*[—–-]\s*(?P<second>\d{1,2})[./]"

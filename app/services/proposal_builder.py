@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from decimal import Decimal
 
+from app.domain.content_models import Activity
 from app.domain.discovery_models import (
     DiscoveryFeasibilityResult,
     DiscoveryProposalResult,
@@ -136,6 +137,36 @@ class ProposalBuilder:
             trade_off = "Часть расходов пока неизвестна; проверьте её перед бронированием"
         else:
             trade_off = itinerary.warnings[0]
+        planned_ids = {
+            activity.activity_id
+            for day in itinerary.days
+            for activity in (
+                *(item.activity for item in day.activities),
+                *day.suggestions,
+            )
+        }
+        planned_names = {
+            " ".join(activity.name.casefold().replace("ё", "е").split())
+            for day in itinerary.days
+            for activity in (
+                *(item.activity for item in day.activities),
+                *day.suggestions,
+            )
+        }
+        additional_activities: list[Activity] = []
+        additional_names: set[str] = set()
+        for activity in content.activities:
+            normalized_name = " ".join(activity.name.casefold().replace("ё", "е").split())
+            if (
+                activity.activity_id in planned_ids
+                or normalized_name in planned_names
+                or normalized_name in additional_names
+            ):
+                continue
+            additional_activities.append(activity)
+            additional_names.add(normalized_name)
+            if len(additional_activities) == 4:
+                break
         return WeekendProposal(
             candidate=candidate,
             trip_option=option,
@@ -151,7 +182,7 @@ class ProposalBuilder:
             content_grounded=content_grounded,
             trade_off=trade_off,
             content_complete=itinerary.content_complete,
-            suggested_activities=content.activities[:4],
+            suggested_activities=tuple(additional_activities),
         )
 
 

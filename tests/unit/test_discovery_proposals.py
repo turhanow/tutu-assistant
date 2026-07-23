@@ -224,6 +224,29 @@ def test_itinerary_uses_real_city_window_and_splits_anchors_across_days() -> Non
     assert result.content_complete
 
 
+def test_itinerary_never_recommends_same_place_twice_under_different_ids() -> None:
+    duplicate_content = content()
+    duplicate = activity(
+        "kolomna",
+        99,
+        name="  активность   1 ",
+    )
+    duplicate_content = duplicate_content.model_copy(
+        update={"activities": (*duplicate_content.activities, duplicate)}
+    )
+
+    result = ItineraryBuilder().build(duplicate_content, option(), verified_at=NOW)
+
+    planned = [
+        item
+        for day in result.days
+        for item in (*(scheduled.activity for scheduled in day.activities), *day.suggestions)
+    ]
+    normalized = [" ".join(item.name.casefold().split()) for item in planned]
+    assert len(normalized) == len(set(normalized))
+    assert duplicate.activity_id in result.unscheduled_activity_ids
+
+
 def test_plan_is_built_from_fallback_activities_when_no_verified_content() -> None:
     empty_content = DestinationContent(
         destination=destination(),
@@ -436,7 +459,13 @@ async def test_ai_generated_program_is_labeled_and_never_renarrated_as_grounded(
 
     assert recommendation.proposal.content_grounded is False
     assert recommendation.proposal.evidence_ids == frozenset()
-    assert len(recommendation.proposal.suggested_activities) == 2
+    assert recommendation.proposal.suggested_activities == ()
+    planned_names = [
+        item.name.casefold()
+        for day in recommendation.proposal.days
+        for item in (*(scheduled.activity for scheduled in day.activities), *day.suggestions)
+    ]
+    assert len(planned_names) == len(set(planned_names))
     assert "подобраны AI" in recommendation.proposal.trade_off
     assert copies[0].evidence_ids == frozenset()
 

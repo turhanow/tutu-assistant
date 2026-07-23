@@ -619,6 +619,7 @@ async def test_complete_ideas_request_reaches_verified_proposals_end_to_end() ->
     assert "куда можно уехать" in final_call.args[0]
     keyboard = final_call.kwargs["reply_markup"]
     assert keyboard.inline_keyboard[0][0].text == "Решились? Подобрать варианты"
+    assert keyboard.inline_keyboard[1][0].text == "Уточнить пожелания"
     callbacks = [
         button.callback_data
         for row in keyboard.inline_keyboard
@@ -726,6 +727,33 @@ async def test_natural_date_follow_ups_continue_discovery(answer_text, expected)
     assert len(selector.calls) == 1
     request = selector.calls[0]
     assert (request.dates.start, request.dates.end) == expected
+
+
+@pytest.mark.asyncio
+async def test_free_form_date_follow_up_falls_back_to_contextual_llm() -> None:
+    incomplete = complete_draft(departure_date=None, return_date=None)
+    extracted_dates = complete_draft(
+        origin=None,
+        departure_date=date(2026, 7, 31),
+        return_date=date(2026, 8, 1),
+    )
+    service, extractor, selector, *_ = conversation(
+        parsed(incomplete),
+        parsed(extracted_dates),
+    )
+    context = SimpleNamespace(user_data={})
+    incoming, _ = telegram_message("Хочу молодёжный город")
+    assert await service.intake(telegram_update(incoming), context) is DiscoveryState.CLARIFY
+
+    answer, _ = telegram_message("со следующей пятницы на два дня")
+    state = await service.clarification_input(telegram_update(answer), context)
+
+    assert state is DiscoveryState.RESULTS
+    assert len(extractor.calls) == 2
+    assert extractor.calls[1][0] == "со следующей пятницы на два дня"
+    request = selector.calls[0]
+    assert request.dates.start == date(2026, 7, 31)
+    assert request.dates.end == date(2026, 8, 1)
 
 
 @pytest.mark.asyncio
@@ -990,6 +1018,8 @@ async def test_details_reject_reason_and_handoff_remain_inside_current_revision(
     state = await service.callback(SimpleNamespace(callback_query=reason_query), context)
     assert state is DiscoveryState.RESULTS
     assert "Спасибо" in incoming.reply_text.call_args.args[0]
+    controls = incoming.reply_text.call_args.kwargs["reply_markup"]
+    assert controls.inline_keyboard[0][0].text == "Уточнить пожелания"
 
     handoff_query = SimpleNamespace(
         data=keyboard.inline_keyboard[1][0].callback_data,

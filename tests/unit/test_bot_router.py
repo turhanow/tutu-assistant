@@ -193,24 +193,31 @@ async def test_onboarding_accepts_moscow_geo_without_storing_coordinates() -> No
 
 @pytest.mark.asyncio
 async def test_onboarding_accepts_origin_as_text() -> None:
+    parsed = IntentParseResult(
+        intent=TripIntent.DESTINATION_UNKNOWN,
+        confidence="0.99",
+        discovery_draft=DiscoveryDraft(origin="Москва"),
+    )
+    extractor = Extractor(parsed)
     router = BotRouter(
-        Extractor(),  # type: ignore[arg-type]
+        extractor,  # type: ignore[arg-type]
         KnownConversation(),  # type: ignore[arg-type]
         IdeasConversation(),  # type: ignore[arg-type]
         FakeClock(),
         timezone="Europe/Moscow",
     )
-    incoming, _ = update("Тула")
+    incoming, _ = update("мск")
     incoming.effective_message.location = None
     context = SimpleNamespace(user_data={})
 
     state = await router.location_input(incoming, context)
 
     assert state is RouterState.CHOICE
-    assert context.user_data["onboarding_origin"] == "Тула"
+    assert context.user_data["onboarding_origin"] == "Москва"
     replies = incoming.effective_message.reply_text.call_args_list
-    assert replies[-2].args[0] == "Выбран город отправления: Тула."
+    assert replies[-2].args[0] == "Выбран город отправления: Москва."
     assert "Геопозиция получена" not in replies[-2].args[0]
+    assert extractor.calls[0][1].expected_field == "origin"
 
 
 @pytest.mark.asyncio

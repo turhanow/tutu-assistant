@@ -33,7 +33,10 @@ from app.services.explicit_constraints import (
     extract_explicit_party,
     resolved_hotel_mode,
 )
-from app.services.known_input_guardrails import extract_explicit_trip_dates
+from app.services.known_input_guardrails import (
+    extract_explicit_trip_dates,
+    normalize_optional_city,
+)
 from app.voice import FORBIDDEN_SLANG
 
 MAX_INPUT_LENGTH = 2_000
@@ -151,6 +154,14 @@ class OpenAIIntentExtractor:
             f"{intent_v1.INSTRUCTIONS}\nCurrent date: {context.current_date}. "
             f"User timezone: {context.timezone}. Prompt version: {intent_v1.PROMPT_VERSION}."
         )
+        if context.expected_field in {"origin", "destination"}:
+            role = "departure" if context.expected_field == "origin" else "destination"
+            instructions += (
+                f"\nConversation context: this turn is the user's answer to the application's "
+                f"question about the {role} city. Interpret a short city name or alias as "
+                f"{context.expected_field}, return its official Russian name in nominative case, "
+                "and leave it null when the reference is genuinely ambiguous."
+            )
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 for attempt in range(2):
@@ -314,8 +325,8 @@ def _map_intent(
         intent is TripIntent.EVENT_LED and value.destination is not None
     ):
         known_draft = ParsedTripDraft(
-            origin=value.origin,
-            destination=value.destination,
+            origin=normalize_optional_city(value.origin),
+            destination=normalize_optional_city(value.destination),
             departure_date=departure_date,
             return_date=return_date,
             adults=party.adults if party.adults is not None else value.adults,
@@ -332,7 +343,7 @@ def _map_intent(
         missing = tuple(field for field in required if getattr(known_draft, field) is None)
     else:
         discovery_draft = DiscoveryDraft(
-            origin=value.origin,
+            origin=normalize_optional_city(value.origin),
             departure_date=departure_date,
             return_date=return_date,
             date_flexibility=(

@@ -101,6 +101,21 @@ async def test_structured_extraction_maps_to_domain_without_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_known_route_parser_accepts_canonical_cities_resolved_by_llm() -> None:
+    client = FakeClient([extraction(origin="Москва", destination="Санкт-Петербург")])
+    parser = OpenAIRequestParser(client)  # type: ignore[arg-type]
+
+    result = await parser.parse(
+        "из мск в спб",
+        now=datetime(2026, 7, 21, tzinfo=UTC),
+        timezone="Europe/Moscow",
+    )
+
+    assert result.draft.origin == "Москва"
+    assert result.draft.destination == "Санкт-Петербург"
+
+
+@pytest.mark.asyncio
 async def test_extraction_preserves_unsupported_party_for_scope_validation() -> None:
     client = FakeClient([extraction(adults=2, children=1, rooms=2)])
     parser = OpenAIRequestParser(client)  # type: ignore[arg-type]

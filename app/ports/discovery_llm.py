@@ -11,6 +11,7 @@ from app.domain.discovery_models import GroundedProposalFacts, IntentParseResult
 class ConversationContext:
     timezone: str
     current_date: str
+    expected_field: str | None = None
 
 
 class IntentExtractor(Protocol):

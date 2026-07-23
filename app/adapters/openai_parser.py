@@ -20,7 +20,10 @@ from app.domain.models import (
     TransportMode,
 )
 from app.services.explicit_constraints import extract_explicit_party, resolved_hotel_mode
-from app.services.known_input_guardrails import extract_explicit_trip_dates
+from app.services.known_input_guardrails import (
+    extract_explicit_trip_dates,
+    normalize_optional_city,
+)
 
 MAX_INPUT_LENGTH = 2_000
 SYSTEM_INSTRUCTIONS = """You extract short-trip parameters from Russian user text.
@@ -33,7 +36,10 @@ event time, transport preference, or traveler count. Treat «в эти выхо�
 nearest usable Saturday-Sunday pair in the user's timezone: the current weekend on
 Saturday, otherwise the next weekend. For a trip with at least one night, set hotel
 to required by default; preserve forbidden only when the user explicitly asks to go
-without a hotel. Preserve the
+without a hotel. Use your linguistic and geographic knowledge to normalize unambiguous
+city abbreviations, colloquial names, spelling variants and grammatical forms to the
+official Russian city name in nominative case. Do not guess genuinely ambiguous aliases.
+Preserve the
 explicit number of adults, children and rooms even when it is outside the supported
 product scope; validation will explain the limitation after extraction."""
 
@@ -190,8 +196,8 @@ class OpenAIRequestParser:
         )
         try:
             draft = ParsedTripDraft(
-                origin=value.origin,
-                destination=value.destination,
+                origin=normalize_optional_city(value.origin),
+                destination=normalize_optional_city(value.destination),
                 departure_date=departure_date,
                 return_date=return_date,
                 adults=party.adults if party.adults is not None else value.adults,
@@ -219,7 +225,7 @@ class OpenAIRequestParser:
                     SortPreference(value.sort_preference.value) if value.sort_preference else None
                 ),
             )
-        except ValidationError as error:
+        except (ValidationError, ValueError) as error:
             raise LlmParseError("OpenAI extraction violates the trip schema") from error
         missing = tuple(
             field

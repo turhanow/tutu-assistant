@@ -38,9 +38,17 @@ def test_travel_numbers_do_not_trigger_sensitive_data_guard(text: str) -> None:
     assert not contains_sensitive_data(text)
 
 
-def test_city_answer_removes_preposition_and_normalizes_common_inflection() -> None:
-    assert normalize_city_answer("Из Москвы.") == "Москва"
-    assert normalize_city_answer("в Санкт-Петербург") == "Санкт-Петербург"
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Из Москвы.", "Москвы"),
+        ("из мск", "мск"),
+        ("в Санкт-Петербург", "Санкт-Петербург"),
+        ("Нижний Новгород", "Нижний Новгород"),
+    ],
+)
+def test_city_answer_only_cleans_syntax_without_encoding_alias_knowledge(raw, expected) -> None:
+    assert normalize_city_answer(raw) == expected
 
 
 def test_recovery_preserves_route_and_labelled_reversed_dates() -> None:

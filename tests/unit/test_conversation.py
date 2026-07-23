@@ -52,7 +52,7 @@ class PatchParser:
     async def parse(self, text, *, now, timezone, safety_identifier=None):
         self.calls.append(text)
         patches = {
-            "Из Москвы": ParsedTripDraft(origin="Москва"),
+            "Город отправления: Из Москвы": ParsedTripDraft(origin="Москва"),
             "15–16 августа 2026": ParsedTripDraft(
                 departure_date="2026-08-15",
                 return_date="2026-08-16",
@@ -137,7 +137,7 @@ async def test_natural_language_always_calls_parser_and_mcp_waits_for_confirmati
 
 
 @pytest.mark.asyncio
-async def test_short_form_followups_skip_llm_and_complete_deterministically() -> None:
+async def test_city_followups_try_llm_then_fall_back_for_canonical_names() -> None:
     parser = FailingParser()
     planner = FakePlanner()
     conversation = TripConversation(
@@ -158,7 +158,9 @@ async def test_short_form_followups_skip_llm_and_complete_deterministically() ->
         )
 
     assert state is State.CONFIRM
-    assert len(parser.calls) == 1
+    assert len(parser.calls) == 3
+    assert parser.calls[1][0] == "Город отправления: Москва"
+    assert parser.calls[2][0] == "Город назначения: Казань"
     assert not planner.calls
     assert context.user_data["trip_draft"].hotel_mode is None
     assert build_trip_request(context.user_data["trip_draft"]).hotel.mode is HotelMode.REQUIRED

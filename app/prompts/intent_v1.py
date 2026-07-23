@@ -17,6 +17,11 @@ Rules:
 - destination_unknown when they ask where to go or describe only motive/interests/constraints;
 - event_led when a concrete event or visit is the central reason, whether destination is known;
 - resolve relative dates only from the supplied current date and timezone;
+- use your linguistic and geographic knowledge to normalize unambiguous Russian city
+  abbreviations, colloquial names, spelling variants and grammatical forms to the official
+  Russian city name in nominative case; do not require the alias to be listed in this prompt;
+- do not guess when a colloquial city name is genuinely ambiguous; leave the field null so the
+  application can ask a clarification;
 - «в эти выходные» means the nearest usable Saturday-Sunday pair: use the current weekend
   on Saturday, otherwise the next weekend;
 - for a trip spanning at least one night, hotel_mode=required by default; set forbidden only

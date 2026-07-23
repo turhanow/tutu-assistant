@@ -258,7 +258,7 @@ class DiscoveryConversation:
             self._voice.progress("discovery_clarify", context.user_data)
         )
         try:
-            parsed = await self._extract(message.text or "", update)
+            parsed = await self._extract(message.text or "", update, expected_field=field)
         except LlmParseError:
             logger.warning(
                 "discovery_clarification_mapping_failed",
@@ -502,8 +502,10 @@ class DiscoveryConversation:
         try:
             shortlist = await self._selector.select(request)
         except UnsupportedOriginError as error:
-            await progress.edit_text(str(error))
-            return DiscoveryState.RESULTS
+            context.user_data[_DRAFT] = draft.model_copy(update={"origin": None})
+            context.user_data[_PENDING_FIELD] = "origin"
+            await progress.edit_text(f"{error}\n\nНапишите город отправления ещё раз.")
+            return DiscoveryState.CLARIFY
         except Exception:
             logger.exception("destination shortlist failed")
             await progress.edit_text(
@@ -791,11 +793,7 @@ class DiscoveryConversation:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"Подробнее · {name}",
-                        callback_data=self._callback(context, DiscoveryAction.DETAILS, str(index)),
-                    ),
-                    InlineKeyboardButton(
-                        "План на 2 дня",
+                        f"План на 2 дня · {name}",
                         callback_data=self._callback(context, DiscoveryAction.PLAN, str(index)),
                     ),
                 ]
@@ -903,12 +901,19 @@ class DiscoveryConversation:
             )
         )
 
-    async def _extract(self, text: str, update: Update) -> IntentParseResult:
+    async def _extract(
+        self,
+        text: str,
+        update: Update,
+        *,
+        expected_field: str | None = None,
+    ) -> IntentParseResult:
         return await self._extractor.extract(
             text,
             context=ConversationContext(
                 timezone=self._timezone,
                 current_date=self._clock.now().date().isoformat(),
+                expected_field=expected_field,
             ),
             safety_identifier=self._safety_identifier(update),
         )
@@ -1017,7 +1022,12 @@ def _apply_deterministic_clarification(
             # LLM extractor when deterministic parsing has no result.
             return None
         return draft.model_copy(update={"departure_date": explicit[0], "return_date": explicit[1]})
-    if field in {"origin", "hotel_mode"}:
+    if field == "origin":
+        # City aliases and grammatical forms need linguistic/geographic context.
+        # Delegate them to the structured LLM extractor instead of maintaining an
+        # incomplete alias dictionary in application code.
+        return None
+    if field == "hotel_mode":
         try:
             parsed = apply_form_answer(
                 ParsedTripDraft(),

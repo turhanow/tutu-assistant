@@ -31,7 +31,7 @@ from app.domain.discovery_models import (
     TravelPace,
     TripIntent,
 )
-from app.domain.errors import LlmParseError
+from app.domain.errors import LlmParseError, UnsupportedOriginError
 from app.domain.models import (
     CheckoutLink,
     HotelMode,
@@ -79,6 +79,13 @@ class FakeSelector:
             catalog_version="v1",
             score_version="candidate_v1",
         )
+
+
+class MoscowOnlySelector(FakeSelector):
+    async def select(self, request):
+        if request.origin != "Москва":
+            raise UnsupportedOriginError("Подбор направлений пока работает только из: Москва.")
+        return await super().select(request)
 
 
 class FakeDiscoveryPlanner:
@@ -194,6 +201,34 @@ async def test_onboarding_origin_survives_first_free_form_discovery_prompt() -> 
     assert start_state is DiscoveryState.INTAKE
     assert result_state is DiscoveryState.RESULTS
     assert context.user_data["discovery_draft"].origin == "Москва"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_origin_can_be_corrected_with_moscow_alias() -> None:
+    selector = MoscowOnlySelector()
+    service, extractor, *_ = conversation(
+        parsed(complete_draft(origin="Неизвестный город")),
+        parsed(complete_draft(origin="Москва")),
+        selector=selector,
+    )
+    context = SimpleNamespace(user_data={})
+    incoming, status = telegram_message("Хочу одним днём вдохновиться искусством")
+
+    state = await service.intake(telegram_update(incoming), context)
+
+    assert state is DiscoveryState.CLARIFY
+    assert context.user_data["discovery_pending_field"] == "origin"
+    assert context.user_data["discovery_draft"].origin is None
+    assert "Напишите город отправления ещё раз" in status.edit_text.call_args.args[0]
+
+    answer, _ = telegram_message("из мск")
+    state = await service.clarification_input(telegram_update(answer), context)
+
+    assert state is DiscoveryState.RESULTS
+    assert context.user_data["discovery_draft"].origin == "Москва"
+    assert len(extractor.calls) == 2
+    assert extractor.calls[-1][1].expected_field == "origin"
+    assert selector.calls[-1].origin == "Москва"
 
 
 def conversation(*extractor_results, handoff=None, analytics=None, selector=None):
@@ -847,11 +882,11 @@ async def test_stale_revision_is_rejected_and_recheck_uses_existing_shortlist() 
     )
     await service.callback(SimpleNamespace(callback_query=compare_query), context)
     keyboard = incoming.edit_text.call_args.kwargs["reply_markup"]
-    details_data = keyboard.inline_keyboard[0][0].callback_data
+    plan_data = keyboard.inline_keyboard[0][0].callback_data
     recheck_data = keyboard.inline_keyboard[-2][1].callback_data
 
     stale_query = SimpleNamespace(
-        data=details_data,
+        data=plan_data,
         answer=AsyncMock(),
         message=incoming,
     )
@@ -967,7 +1002,7 @@ async def test_new_prompt_after_comparison_replaces_previous_preferences() -> No
 
 
 @pytest.mark.asyncio
-async def test_details_reject_reason_and_handoff_remain_inside_current_revision() -> None:
+async def test_plan_reject_reason_and_handoff_remain_inside_current_revision() -> None:
     handoff = FakeHandoff()
     service, *_ = conversation(parsed(complete_draft()), handoff=handoff)
     context = SimpleNamespace(user_data={})
@@ -983,17 +1018,15 @@ async def test_details_reject_reason_and_handoff_remain_inside_current_revision(
     await service.callback(SimpleNamespace(callback_query=compare_query), context)
     keyboard = incoming.edit_text.call_args.kwargs["reply_markup"]
 
-    details_query = SimpleNamespace(
-        data=keyboard.inline_keyboard[0][0].callback_data,
-        answer=AsyncMock(),
-        message=incoming,
+    assert all(
+        not button.text.startswith("Подробнее")
+        for row in keyboard.inline_keyboard
+        for button in row
     )
-    state = await service.callback(SimpleNamespace(callback_query=details_query), context)
-    assert state is DiscoveryState.RESULTS
-    assert "Подробнее:" in incoming.reply_text.call_args.args[0]
+    assert keyboard.inline_keyboard[0][0].text == "План на 2 дня · City_A"
 
     plan_query = SimpleNamespace(
-        data=keyboard.inline_keyboard[0][1].callback_data,
+        data=keyboard.inline_keyboard[0][0].callback_data,
         answer=AsyncMock(),
         message=incoming,
     )

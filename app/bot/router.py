@@ -41,7 +41,6 @@ from app.domain.errors import LlmParseError, LlmProviderError
 from app.ports.clock import Clock
 from app.ports.discovery_llm import ConversationContext, IntentExtractor
 from app.services.input_safety import SENSITIVE_DATA_RESPONSE, contains_sensitive_data
-from app.services.known_input_guardrails import normalize_city_answer
 from app.services.product_analytics import ProductAnalytics
 from app.voice import Voice
 
@@ -119,9 +118,27 @@ class BotRouter:
                 await message.reply_text("Напишите город отправления, например: Москва.")
                 return RouterState.LOCATION
             try:
-                origin = normalize_city_answer(text)
-            except ValueError as error:
-                await message.reply_text(str(error))
+                parsed = await self._extractor.extract(
+                    text,
+                    context=ConversationContext(
+                        timezone=self._timezone,
+                        current_date=self._clock.now().date().isoformat(),
+                        expected_field="origin",
+                    ),
+                    safety_identifier=self._safety_identifier(update),
+                )
+            except (LlmParseError, LlmProviderError):
+                await message.reply_text(
+                    "Не удалось распознать город. Напишите его полное название или повторите "
+                    "попытку через минуту."
+                )
+                return RouterState.LOCATION
+            draft = parsed.discovery_draft or parsed.known_draft
+            origin = draft.origin if draft is not None else None
+            if origin is None:
+                await message.reply_text(
+                    "Не удалось однозначно определить город. Уточните его полное название."
+                )
                 return RouterState.LOCATION
         context.user_data[_ONBOARDING_ORIGIN] = origin
         confirmation = (

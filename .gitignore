@@ -208,7 +208,10 @@ tempCodeRunnerFile.py
 .ruff_cache/
 
 # Product research, QA reports, and working documentation are local-only.
-docs/
+# Only the two public repository guides are versioned.
+docs/*
+!docs/USER_GUIDE.md
+!docs/TECHNICAL_GUIDE.md
 
 # Codex/agent workspace state is local-only.
 .codex/

@@ -278,23 +278,35 @@ class TripConversation:
                 + "\nУточните условия без взаимоисключающих вариантов."
             )
             return State.FORM
-        try:
-            direct_draft = apply_form_answer(
-                draft,
-                field,
-                source_text,
-                today=self._clock.now().date(),
-            )
-        except DraftInputError:
+        if field in {"origin", "destination"}:
+            # City aliases, abbreviations and inflected forms are resolved by the LLM.
+            # A local alias dictionary would be incomplete and expensive to maintain.
             direct_draft = None
+        else:
+            try:
+                direct_draft = apply_form_answer(
+                    draft,
+                    field,
+                    source_text,
+                    today=self._clock.now().date(),
+                )
+            except DraftInputError:
+                direct_draft = None
         if direct_draft is not None:
             context.user_data[_DRAFT] = direct_draft
             return await self._continue_or_confirm(message, context)
         parse = getattr(self._parser, "parse", None)
         if callable(parse):
             try:
+                parse_text = (
+                    f"Город отправления: {source_text}"
+                    if field == "origin"
+                    else f"Город назначения: {source_text}"
+                    if field == "destination"
+                    else source_text
+                )
                 parsed = await parse(
-                    source_text,
+                    parse_text,
                     now=self._clock.now(),
                     timezone=self._timezone,
                     safety_identifier=self._safety_identifier(update),

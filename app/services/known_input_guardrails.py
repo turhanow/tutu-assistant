@@ -7,18 +7,6 @@ from datetime import date, timedelta
 
 from app.domain.models import ParsedTripDraft
 
-_CITY_ALIASES = {
-    "москва": "Москва",
-    "москвы": "Москва",
-    "санкт-петербург": "Санкт-Петербург",
-    "санкт-петербурга": "Санкт-Петербург",
-    "питер": "Санкт-Петербург",
-    "питера": "Санкт-Петербург",
-    "казань": "Казань",
-    "казани": "Казань",
-    "ярославль": "Ярославль",
-    "ярославля": "Ярославль",
-}
 _MONTHS = {
     "январь": 1,
     "января": 1,
@@ -58,11 +46,7 @@ _MONTHS = {
     "дек": 12,
 }
 _MONTH_PATTERN = "|".join(sorted(_MONTHS, key=len, reverse=True))
-_DATE = (
-    r"(?P<day>\d{1,2})\s+(?P<month>"
-    + _MONTH_PATTERN
-    + r")\.?(?:\s+(?P<year>20\d{2}))?"
-)
+_DATE = r"(?P<day>\d{1,2})\s+(?P<month>" + _MONTH_PATTERN + r")\.?(?:\s+(?P<year>20\d{2}))?"
 
 
 def normalize_city_answer(value: str) -> str:
@@ -76,7 +60,13 @@ def normalize_city_answer(value: str) -> str:
         or not re.fullmatch(r"[A-Za-zА-Яа-яЁё -]+", normalized)
     ):
         raise ValueError("Введите только название города, например «Москва».")
-    return _CITY_ALIASES.get(normalized.casefold().replace("ё", "е"), normalized)
+    return normalized
+
+
+def normalize_optional_city(value: str | None) -> str | None:
+    """Validate an LLM-canonicalized city while preserving an absent field."""
+
+    return normalize_city_answer(value) if value is not None else None
 
 
 def explicit_conflicts(text: str) -> tuple[str, ...]:

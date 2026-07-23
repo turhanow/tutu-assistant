@@ -129,6 +129,27 @@ async def test_unknown_destination_extraction_maps_profile_without_inventing_cit
 
 
 @pytest.mark.asyncio
+async def test_intent_extraction_uses_llm_canonical_city_without_local_alias_mapping() -> None:
+    client = FakeClient([extraction(origin="Москва")])
+    adapter = OpenAIIntentExtractor(client)  # type: ignore[arg-type]
+
+    result = await adapter.extract(
+        "мск",
+        context=ConversationContext(
+            timezone="Europe/Moscow",
+            current_date="2026-07-21",
+            expected_field="origin",
+        ),
+    )
+
+    assert result.discovery_draft is not None
+    assert result.discovery_draft.origin == "Москва"
+    instructions = client.responses.calls[0]["instructions"]
+    assert "answer to the application's question about the departure city" in instructions
+    assert "мск→" not in instructions
+
+
+@pytest.mark.asyncio
 async def test_known_destination_maps_legacy_draft_for_compatible_flow() -> None:
     client = FakeClient(
         [

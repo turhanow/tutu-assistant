@@ -28,8 +28,15 @@ def rank_options(
     durations = [
         Decimal(str(item.metrics.total_travel_duration.total_seconds())) for item in combinations
     ]
+    city_times = [Decimal(str(item.metrics.time_in_city.total_seconds())) for item in combinations]
     scores = {
-        item.signature: _score(item, costs=costs, durations=durations) for item in combinations
+        item.signature: _score(
+            item,
+            costs=costs,
+            durations=durations,
+            city_times=city_times,
+        )
+        for item in combinations
     }
     cheapest = min(
         (
@@ -93,14 +100,16 @@ def calculate_balance_score(
     *,
     cost_norm: Decimal,
     duration_norm: Decimal,
+    city_time_penalty: Decimal,
     transfers_penalty: Decimal,
     night_penalty: Decimal,
     awkward_time_penalty: Decimal,
     hotel_quality_penalty: Decimal,
 ) -> Decimal:
     return (
-        Decimal("0.45") * cost_norm
-        + Decimal("0.25") * duration_norm
+        Decimal("0.35") * cost_norm
+        + Decimal("0.15") * duration_norm
+        + Decimal("0.20") * city_time_penalty
         + Decimal("0.10") * transfers_penalty
         + Decimal("0.08") * night_penalty
         + Decimal("0.05") * awkward_time_penalty
@@ -113,10 +122,12 @@ def _score(
     *,
     costs: Sequence[Decimal],
     durations: Sequence[Decimal],
+    city_times: Sequence[Decimal],
 ) -> Decimal:
     exact_cost = item.price.known_total if item.price.status is PriceStatus.EXACT else None
     cost_norm = _normalize(exact_cost, costs) if exact_cost is not None else Decimal(1)
     duration = Decimal(str(item.metrics.total_travel_duration.total_seconds()))
+    city_time = Decimal(str(item.metrics.time_in_city.total_seconds()))
     transfers = item.outbound.transfers
     return_transfers = item.return_offer.transfers
     transfers_penalty = (
@@ -142,6 +153,7 @@ def _score(
     return calculate_balance_score(
         cost_norm=cost_norm,
         duration_norm=_normalize(duration, durations),
+        city_time_penalty=Decimal(1) - _normalize(city_time, city_times),
         transfers_penalty=transfers_penalty,
         night_penalty=night_penalty,
         awkward_time_penalty=awkward,

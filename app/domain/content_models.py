@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
+from urllib.parse import parse_qs
 
 from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 
@@ -69,7 +70,9 @@ class Activity(DomainModel):
     duration: timedelta = Field(gt=timedelta(0), le=timedelta(hours=12))
     estimated_cost: PriceRange | None = None
     indoor: bool | None = None
-    evidence_ids: frozenset[ContentId] = Field(min_length=1)
+    evidence_ids: frozenset[ContentId] = frozenset()
+    address: str | None = Field(default=None, min_length=3, max_length=300)
+    map_url: AnyHttpUrl | None = None
 
     @field_validator("categories")
     @classmethod
@@ -78,6 +81,20 @@ class Activity(DomainModel):
         if not normalized:
             raise ValueError("activity requires at least one category")
         return normalized
+
+    @field_validator("map_url")
+    @classmethod
+    def require_yandex_maps_url(cls, value: AnyHttpUrl | None) -> AnyHttpUrl | None:
+        if value is None:
+            return None
+        if value.scheme != "https" or value.host != "yandex.ru" or value.path != "/maps/":
+            raise ValueError("activity map URL must use the Yandex Maps search endpoint")
+        if value.username or value.password or value.fragment:
+            raise ValueError("activity map URL must not contain credentials or fragments")
+        query = parse_qs(value.query or "", keep_blank_values=True)
+        if set(query) != {"text"} or len(query["text"]) != 1 or not query["text"][0].strip():
+            raise ValueError("activity map URL must contain only one non-empty text query")
+        return value
 
 
 class DestinationProfile(DomainModel):
@@ -93,7 +110,16 @@ class DestinationProfile(DomainModel):
         le=timedelta(days=4),
     )
     estimated_daily_cost: PriceRange | None = None
-    evidence_ids: frozenset[ContentId] = Field(min_length=1)
+    activity_highlights: tuple[str, ...] = Field(default=(), max_length=3)
+    evidence_ids: frozenset[ContentId] = frozenset()
+
+    @field_validator("activity_highlights")
+    @classmethod
+    def normalize_activity_highlights(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(item.strip() for item in value if item.strip())
+        if len({item.casefold() for item in normalized}) != len(normalized):
+            raise ValueError("activity highlights must be unique")
+        return normalized
 
     @field_validator("season_months")
     @classmethod
@@ -116,6 +142,7 @@ class DestinationContent(DomainModel):
     activities: tuple[Activity, ...] = ()
     evidence: tuple[EvidenceRef, ...]
     catalog_version: str = Field(min_length=1, max_length=50)
+    is_ai_generated: bool = False
 
     @model_validator(mode="after")
     def validate_references(self) -> DestinationContent:
@@ -134,6 +161,8 @@ class DestinationContent(DomainModel):
         activity_ids = [item.activity_id for item in self.activities]
         if len(activity_ids) != len(set(activity_ids)):
             raise ValueError("activity IDs must be unique")
+        if not self.is_ai_generated and not referenced:
+            raise ValueError("curated destination content requires evidence")
         return self
 
 

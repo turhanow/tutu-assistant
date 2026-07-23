@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -30,11 +31,18 @@ from app.domain.discovery_models import (
     TripIntent,
 )
 from app.domain.errors import LlmParseError
-from app.domain.models import CheckoutLink, HotelMode, TripCheckoutItem, TripComponent
+from app.domain.models import (
+    CheckoutLink,
+    HotelMode,
+    SortPreference,
+    TripCheckoutItem,
+    TripComponent,
+)
 from app.services.discovery_ranking import rank_proposals
 from app.services.discovery_request_builder import build_discovery_request
 from app.services.product_analytics import ProductAnalytics
 from tests.unit.test_discovery_proposals import candidate, feasibility, proposal
+from tests.unit.test_trip_handoff import search_result
 
 NOW = datetime(2026, 7, 22, 12, tzinfo=UTC)
 
@@ -203,8 +211,64 @@ def test_versioned_callback_codec_is_compact_and_rejects_noncanonical_data() -> 
         CallbackCodec.encode(value.__class__("not-safe", 1, DiscoveryAction.NEW))
 
 
+def test_every_recommendation_has_its_own_itinerary_button() -> None:
+    service, *_ = conversation(parsed(complete_draft()))
+    result = DiscoveryProposalResult(
+        recommendations=rank_proposals(
+            (proposal("city_a"), proposal("city_b"), proposal("city_c"))
+        ),
+        completed_at=NOW,
+    )
+    context = SimpleNamespace(
+        user_data={"discovery_flow_id": "abcd1234", "discovery_revision": 1}
+    )
+
+    keyboard = service._proposals_keyboard(context, result)
+
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+    plan_buttons = [button for button in buttons if button.text.startswith("План на 2 дня")]
+    assert len(plan_buttons) == 3
+
+
 def test_discovery_formatters_keep_money_classes_separate_and_split_on_sections() -> None:
     recommendation = rank_proposals((proposal("city_a"),))[0]
+    days = recommendation.proposal.days
+    linked_activity = days[0].activities[0].activity.model_copy(
+        update={
+            "address": "Советская улица, 3",
+            "map_url": "https://yandex.ru/maps/?text=Test%20Place%2C%20City",
+        }
+    )
+    linked_schedule = days[0].activities[0].model_copy(update={"activity": linked_activity})
+    days = (
+        days[0].model_copy(
+            update={"activities": (linked_schedule, *days[0].activities[1:])}
+        ),
+        *days[1:],
+    )
+    recommendation = recommendation.model_copy(
+        update={"proposal": recommendation.proposal.model_copy(update={"days": days})}
+    )
+    trip_option = recommendation.proposal.trip_option
+    combination = trip_option.combination
+    combination = combination.model_copy(
+        update={
+            "outbound": combination.outbound.model_copy(
+                update={"service_number": "6104", "carrier": "ЦППК"}
+            ),
+            "return_offer": combination.return_offer.model_copy(
+                update={"service_number": "B-42", "carrier": "Тестовый перевозчик"}
+            ),
+            "hotel": search_result().options[0].combination.hotel,
+        }
+    )
+    recommendation = recommendation.model_copy(
+        update={
+            "proposal": recommendation.proposal.model_copy(
+                update={"trip_option": trip_option.model_copy(update={"combination": combination})}
+            )
+        }
+    )
     copy = ProposalCopy(
         proposal_id="proposal_1",
         title="<City_A>",
@@ -213,17 +277,195 @@ def test_discovery_formatters_keep_money_classes_separate_and_split_on_sections(
         evidence_ids={"source_city_a"},
     )
 
-    sections = format_proposal_sections((recommendation,), (copy,))
+    checkout_items = {
+        "city_a": (
+            TripCheckoutItem(
+                component=TripComponent.OUTBOUND,
+                link=CheckoutLink(
+                    url="https://www.tutu.ru/booking/outbound",
+                    kind="direct_offer",
+                ),
+            ),
+            TripCheckoutItem(
+                component=TripComponent.RETURN,
+                link=CheckoutLink(
+                    url="https://www.tutu.ru/schedule/return",
+                    kind="schedule_url",
+                ),
+            ),
+            TripCheckoutItem(
+                component=TripComponent.HOTEL,
+                link=CheckoutLink(
+                    url="https://www.tutu.ru/hotel/selected",
+                    kind="hotel_page",
+                ),
+            ),
+        )
+    }
+    sections = format_proposal_sections((recommendation,), (copy,), checkout_items)
     section_limit = max(len(item) for item in sections)
     messages = pack_html_sections(sections, limit=section_limit)
 
     rendered = "\n".join(messages)
     assert "&lt;City_A&gt;" in rendered
-    assert "Подтверждённая стоимость" in rendered
-    assert "Отель: не нужен" in rendered
+    assert "Предварительная стоимость" in rendered
+    assert 'Отель: <a href="https://yandex.ru/maps/?text=' in rendered
+    assert 'номер: <a href="https://www.tutu.ru/hotel/selected"' in rendered
+    assert "на карте</a>" not in rendered
+    assert 'Туда: <a href="https://www.tutu.ru/booking/outbound">' in rendered
+    assert "поезд № 6104 · ЦППК</a> · 22.08, 15:00 → 22.08, 17:00" in rendered
+    assert "Обратно: автобус № B-42 · Тестовый перевозчик · 23.08, 18:00" in rendered
+    assert 'href="https://www.tutu.ru/booking/outbound"' in rendered
+    assert "расписание на Tutu</a>" in rendered
+    assert "Выбор дороги: лучший баланс цены, времени в пути" in rendered
+    assert "Чем заняться:" in rendered
+    assert '<a href="https://yandex.ru/maps/?text=Test%20Place%2C%20City">' in rendered
+    assert rendered.index("Чем заняться:") < rendered.index("Туда:")
+    assert "Что делать:" not in rendered
     assert "Программа:" in format_program(recommendation)
     assert len(messages) == 2
     assert all(len(item) <= section_limit for item in messages)
+
+
+def test_proposal_uses_suggestions_when_no_activity_fits_schedule() -> None:
+    recommendation = rank_proposals((proposal("city_a"),))[0]
+    source_activity = recommendation.proposal.days[0].activities[0].activity
+    linked_activity = source_activity.model_copy(
+        update={
+            "map_url": "https://yandex.ru/maps/?text=Suggested%20Museum",
+        }
+    )
+    empty_days = tuple(
+        day.model_copy(update={"activities": ()}) for day in recommendation.proposal.days
+    )
+    recommendation = recommendation.model_copy(
+        update={
+            "proposal": recommendation.proposal.model_copy(
+                update={
+                    "days": empty_days,
+                    "content_complete": False,
+                    "suggested_activities": (linked_activity,),
+                }
+            )
+        }
+    )
+    copy = ProposalCopy(
+        proposal_id="proposal_1",
+        title="City A",
+        reason="Подходит по интересам",
+        trade_off="Проверьте часы работы",
+        evidence_ids={"source_city_a"},
+    )
+
+    rendered = "\n".join(format_proposal_sections((recommendation,), (copy,)))
+
+    assert "Чем заняться:" in rendered
+    assert "Suggested%20Museum" in rendered
+
+
+def test_hotel_without_room_name_keeps_map_and_booking_links_separate() -> None:
+    recommendation = rank_proposals((proposal("city_a"),))[0]
+    trip_option = recommendation.proposal.trip_option
+    combination = trip_option.combination
+    hotel = search_result().options[0].combination.hotel.model_copy(
+        update={"room_name": None}
+    )
+    recommendation = recommendation.model_copy(
+        update={
+            "proposal": recommendation.proposal.model_copy(
+                update={
+                    "trip_option": trip_option.model_copy(
+                        update={
+                            "combination": combination.model_copy(update={"hotel": hotel})
+                        }
+                    )
+                }
+            )
+        }
+    )
+    copy = ProposalCopy(
+        proposal_id="proposal_1",
+        title="City A",
+        reason="Подходит по интересам",
+        trade_off="Проверьте условия",
+        evidence_ids={"source_city_a"},
+    )
+    checkout = {
+        "city_a": (
+            TripCheckoutItem(
+                component=TripComponent.HOTEL,
+                link=CheckoutLink(
+                    url="https://www.tutu.ru/hotel/selected",
+                    kind="hotel_page",
+                ),
+            ),
+        )
+    }
+
+    rendered = "\n".join(
+        format_proposal_sections((recommendation,), (copy,), checkout)
+    )
+
+    assert 'Отель: <a href="https://yandex.ru/maps/?text=' in rendered
+    assert '<a href="https://www.tutu.ru/hotel/selected">забронировать</a>' in rendered
+
+
+def test_card_and_program_expose_cheaper_and_faster_verified_alternatives() -> None:
+    recommendation = rank_proposals((proposal("city_a"),))[0]
+    selected = recommendation.proposal.trip_option
+    cheap_combination = selected.combination.model_copy(
+        update={
+            "signature": "cheap-alternative",
+            "price": selected.combination.price.model_copy(
+                update={"known_total": Decimal("1500")}
+            ),
+        }
+    )
+    fast_combination = selected.combination.model_copy(
+        update={
+            "signature": "fast-alternative",
+            "price": selected.combination.price.model_copy(
+                update={"known_total": Decimal("2600")}
+            ),
+        }
+    )
+    alternatives = (
+        selected.model_copy(
+            update={
+                "combination": cheap_combination,
+                "labels": frozenset({SortPreference.CHEAPEST}),
+            }
+        ),
+        selected.model_copy(
+            update={
+                "combination": fast_combination,
+                "labels": frozenset({SortPreference.FASTEST}),
+            }
+        ),
+    )
+    recommendation = recommendation.model_copy(
+        update={
+            "proposal": recommendation.proposal.model_copy(
+                update={"trip_alternatives": alternatives}
+            )
+        }
+    )
+    copy = ProposalCopy(
+        proposal_id="proposal_1",
+        title="City A",
+        reason="Подходит по интересам",
+        trade_off="Проверьте условия",
+        evidence_ids={"source_city_a"},
+    )
+
+    card = "\n".join(format_proposal_sections((recommendation,), (copy,)))
+    program = format_program(recommendation)
+
+    assert "Сравнить варианты: дешевле за 1 500 ₽; быстрее за 2 600 ₽" in card
+    assert "Что ещё можно выбрать" in program
+    assert "Бюджетный" in program
+    assert "Быстрый" in program
+    assert program.count("Туда:") == 3
 
 
 @pytest.mark.asyncio
@@ -252,6 +494,25 @@ async def test_complete_ideas_request_reaches_verified_proposals_end_to_end() ->
     ]
     assert callbacks
     assert all(len(item.encode()) <= 64 for item in callbacks)
+
+
+@pytest.mark.asyncio
+async def test_inline_checkout_links_are_resolved_for_verified_recommendations() -> None:
+    handoff = FakeHandoff()
+    service, *_ = conversation(handoff=handoff)
+    proposals = DiscoveryProposalResult(
+        recommendations=rank_proposals((proposal("city_a"),)),
+        completed_at=NOW,
+    )
+
+    links = await service._resolve_inline_checkout_items(
+        proposals,
+        feasibility("city_a"),
+    )
+
+    assert set(links) == {"city_a"}
+    assert links["city_a"][0].component is TripComponent.OUTBOUND
+    assert len(handoff.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -444,6 +705,9 @@ async def test_refinement_can_change_explicit_hotel_requirement() -> None:
 
     assert state is DiscoveryState.RESULTS
     assert context.user_data["discovery_draft"].hotel_mode is HotelMode.FORBIDDEN
+    assert context.user_data["discovery_shortlist"].request.dates.start == context.user_data[
+        "discovery_shortlist"
+    ].request.dates.end
 
 
 @pytest.mark.asyncio

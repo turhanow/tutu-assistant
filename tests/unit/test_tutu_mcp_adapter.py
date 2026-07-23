@@ -7,7 +7,11 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.adapters.tutu_mcp import TutuMcpAdapter, validate_required_capabilities
+from app.adapters.tutu_mcp import (
+    TutuMcpAdapter,
+    _merge_transport_searches,
+    validate_required_capabilities,
+)
 from app.domain.errors import ProviderContractError, ProviderToolError, ProviderTransientError
 from app.domain.models import (
     HotelMode,
@@ -71,6 +75,15 @@ def adapter_with(session: FakeSession) -> TutuMcpAdapter:
     return adapter
 
 
+def test_transport_comparison_keeps_successful_objective_when_other_one_fails() -> None:
+    offers = _merge_transport_searches(
+        (fixture("transport-search.json"), ProviderTransientError("time sort failed"))
+    )
+
+    assert offers
+    assert offers[0].service_number == "128М"
+
+
 @pytest.mark.asyncio
 async def test_transport_query_uses_captured_schema_names() -> None:
     session = FakeSession(fixture("transport-search.json"))
@@ -85,12 +98,14 @@ async def test_transport_query_uses_captured_schema_names() -> None:
         )
     )
 
-    assert len(offers) == 1
-    name, arguments = session.calls[0]
-    assert name == "search_multitransport"
-    assert arguments["modes"] == ["bus", "railway"]
-    assert arguments["departure_date"] == "2026-08-21"
-    assert None not in arguments.values()
+    assert len(offers) == 2
+    assert len(session.calls) == 2
+    assert {arguments["optimize_for"] for _, arguments in session.calls} == {"price", "time"}
+    for name, arguments in session.calls:
+        assert name == "search_multitransport"
+        assert arguments["modes"] == ["bus", "railway"]
+        assert arguments["departure_date"] == "2026-08-21"
+        assert None not in arguments.values()
 
 
 @pytest.mark.asyncio
@@ -131,9 +146,14 @@ async def test_single_rail_mode_routes_to_targeted_tool() -> None:
     )
 
     assert offers
-    name, arguments = session.calls[0]
-    assert name == "search_rail"
-    assert arguments["passengers"] == 1
+    assert len(session.calls) == 2
+    assert {arguments["sort"] for _, arguments in session.calls} == {
+        "price_asc",
+        "duration_asc",
+    }
+    for name, arguments in session.calls:
+        assert name == "search_rail"
+        assert arguments["passengers"] == 1
 
 
 @pytest.mark.asyncio
@@ -171,7 +191,7 @@ async def test_read_only_search_retries_one_transient_failure(monkeypatch) -> No
     )
 
     assert offers
-    assert len(session.calls) == 2
+    assert len(session.calls) == 3
 
 
 @pytest.mark.asyncio

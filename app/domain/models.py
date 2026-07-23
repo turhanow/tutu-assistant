@@ -141,6 +141,39 @@ class TripRequest(DomainModel):
     event: EventConstraint | None = None
     sort: SortPreference = SortPreference.BALANCED
 
+    @model_validator(mode="before")
+    @classmethod
+    def enforce_hotel_for_overnight_trip(cls, value):
+        if not isinstance(value, Mapping):
+            return value
+        departure = value.get("departure_date")
+        return_date = value.get("return_date")
+        if departure is None or return_date is None:
+            return value
+        departure = date.fromisoformat(departure) if isinstance(departure, str) else departure
+        return_date = (
+            date.fromisoformat(return_date) if isinstance(return_date, str) else return_date
+        )
+        hotel = value.get("hotel")
+        if isinstance(hotel, HotelPreferences):
+            preferences = hotel
+        elif isinstance(hotel, Mapping):
+            preferences = HotelPreferences.model_validate(hotel)
+        else:
+            preferences = HotelPreferences()
+        overnight = return_date > departure
+        if overnight and preferences.mode is HotelMode.FORBIDDEN:
+            return_date = departure
+            overnight = False
+        if not overnight and preferences.mode is HotelMode.REQUIRED:
+            raise ValueError("a same-day trip cannot require a hotel")
+        if overnight and preferences.mode is not HotelMode.REQUIRED:
+            preferences = preferences.model_copy(update={"mode": HotelMode.REQUIRED})
+        normalized = dict(value)
+        normalized["return_date"] = return_date
+        normalized["hotel"] = preferences
+        return normalized
+
     @model_validator(mode="after")
     def validate_route_and_dates(self) -> TripRequest:
         if self.origin.casefold() == self.destination.casefold():
@@ -228,6 +261,8 @@ class TransportOffer(DomainModel):
     price: NonNegativeMoney | None = None
     currency: Currency | None = None
     transfers: int | None = Field(default=None, ge=0)
+    service_number: str | None = Field(default=None, min_length=1, max_length=40)
+    carrier: str | None = Field(default=None, min_length=1, max_length=120)
     provider_url: AnyHttpUrl | None = None
     offer_ref: OfferRef
     timezone_known: bool = True

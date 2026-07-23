@@ -6,6 +6,8 @@ from app.services.input_safety import contains_sensitive_data
 from app.services.known_input_guardrails import (
     explicit_conflicts,
     extract_explicit_date_range,
+    extract_explicit_trip_dates,
+    nearest_weekend,
     normalize_city_answer,
     recover_known_draft,
 )
@@ -73,3 +75,26 @@ def test_explicit_transport_and_hotel_contradictions_are_named() -> None:
     assert len(conflicts) == 2
     assert any("отель" in item for item in conflicts)
     assert any("самолёт" in item for item in conflicts)
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        (date(2026, 7, 22), (date(2026, 7, 25), date(2026, 7, 26))),
+        (date(2026, 7, 25), (date(2026, 7, 25), date(2026, 7, 26))),
+        (date(2026, 7, 26), (date(2026, 8, 1), date(2026, 8, 2))),
+    ],
+)
+def test_nearest_weekend_uses_local_calendar(today: date, expected) -> None:
+    assert nearest_weekend(today) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["в эти выходные", "на этих выходных", "в ближайшие выходные"],
+)
+def test_explicit_weekend_phrase_overrides_model_dates_deterministically(text: str) -> None:
+    assert extract_explicit_trip_dates(text, today=date(2026, 7, 22)) == (
+        date(2026, 7, 25),
+        date(2026, 7, 26),
+    )

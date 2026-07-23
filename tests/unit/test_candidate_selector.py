@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.adapters.file_catalog import FileCatalogRepository, FileDestinationCatalog
+from app.bot.discovery_formatters import format_shortlist
 from app.domain.content_models import DestinationProfile, PriceRange
 from app.domain.discovery_models import DateRange, DiscoveryRequest, ExperienceProfile
 from app.domain.errors import UnsupportedOriginError
@@ -29,6 +30,7 @@ def profile(
     region: str,
     tags: set[str],
     daily_cost: PriceRange | None = None,
+    highlights: tuple[str, ...] = (),
 ) -> DestinationProfile:
     return DestinationProfile(
         destination_id=destination_id,
@@ -37,6 +39,7 @@ def profile(
         experience_tags=tags,
         typical_visit_duration=timedelta(days=2),
         estimated_daily_cost=daily_cost,
+        activity_highlights=highlights,
         evidence_ids={f"source_{destination_id}"},
     )
 
@@ -64,10 +67,22 @@ async def test_selector_prefers_explicit_interest_match() -> None:
     shortlist = await selector.select(request())
 
     assert shortlist.candidates[0].destination.destination_id == "old_city"
-    assert "архитектура" in shortlist.candidates[0].match_reasons[0]
+    assert any("архитектура" in item for item in shortlist.candidates[0].match_reasons)
     assert shortlist.catalog_version == "v-test"
     assert shortlist.score_version == SCORE_VERSION
     assert catalog.calls[0][1] == 12
+
+
+@pytest.mark.asyncio
+async def test_shortlist_progress_message_does_not_expose_unverified_city_hypotheses() -> None:
+    selector = CandidateSelector(
+        FakeCatalog([profile("old_city", region="B", tags={"architecture"})])
+    )
+
+    message = format_shortlist(await selector.select(request()))
+
+    assert "Old_City" not in message
+    assert "конкретные билеты" in message
 
 
 @pytest.mark.asyncio
@@ -138,9 +153,40 @@ async def test_selector_is_bounded_unique_and_deterministic() -> None:
     first = await selector.select(request(), limit=99)
     second = await selector.select(request(), limit=99)
 
-    assert len(first.candidates) == 5
-    assert len({item.destination.destination_id for item in first.candidates}) == 5
+    assert len(first.candidates) == 8
+    assert len({item.destination.destination_id for item in first.candidates}) == 8
     assert first == second
+
+
+@pytest.mark.asyncio
+async def test_selector_describes_each_city_with_its_relevant_activity_highlights() -> None:
+    selector = CandidateSelector(
+        FakeCatalog(
+            [
+                profile(
+                    "tver",
+                    region="Тверская область",
+                    tags={"architecture"},
+                    highlights=("Императорский дворец", "Набережная Степана Разина"),
+                ),
+                profile(
+                    "kolomna",
+                    region="Московская область",
+                    tags={"architecture"},
+                    highlights=("Коломенский кремль", "Музей пастилы"),
+                ),
+            ]
+        )
+    )
+
+    shortlist = await selector.select(request())
+
+    reasons = [item.match_reasons[0] for item in shortlist.candidates]
+    assert reasons == [
+        "Под запрос подходят: Коломенский кремль; Музей пастилы",
+        "Под запрос подходят: Императорский дворец; Набережная Степана Разина",
+    ]
+    assert all("Удобный формат" not in item for item in reasons)
 
 
 @pytest.mark.asyncio

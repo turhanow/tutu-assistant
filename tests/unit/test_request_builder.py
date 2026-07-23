@@ -29,6 +29,18 @@ def test_structured_form_completes_draft_deterministically() -> None:
     assert request.hotel.mode is HotelMode.REQUIRED
 
 
+def test_overnight_known_trip_defaults_to_hotel_without_extra_question() -> None:
+    draft = ParsedTripDraft(
+        origin="Москва",
+        destination="Казань",
+        departure_date=date(2026, 8, 21),
+        return_date=date(2026, 8, 23),
+    )
+
+    assert next_missing_field(draft) is None
+    assert build_trip_request(draft).hotel.mode is HotelMode.REQUIRED
+
+
 @pytest.mark.parametrize("value", ["завтра", "31.02.2026", "2026/08/21"])
 def test_form_rejects_ambiguous_or_invalid_dates(value: str) -> None:
     with pytest.raises(DraftInputError, match=r"ДД\.ММ\.ГГГГ"):
@@ -83,6 +95,21 @@ def test_past_departure_is_rejected_before_confirmation() -> None:
         build_trip_request(draft, today=date(2026, 7, 22))
 
     assert raised.value.field == "departure_date"
+
+
+def test_explicit_hotel_refusal_turns_known_overnight_trip_into_day_trip() -> None:
+    request = build_trip_request(
+        ParsedTripDraft(
+            origin="Москва",
+            destination="Тула",
+            departure_date="2026-08-22",
+            return_date="2026-08-23",
+            hotel_mode=HotelMode.FORBIDDEN,
+        )
+    )
+
+    assert request.return_date == request.departure_date
+    assert request.hotel.mode is HotelMode.FORBIDDEN
 
 
 def test_same_day_required_hotel_is_rejected_before_confirmation() -> None:

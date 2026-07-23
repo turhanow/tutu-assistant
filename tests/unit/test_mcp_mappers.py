@@ -36,6 +36,8 @@ def test_maps_live_transport_fixture_to_domain() -> None:
     assert offer.price == Decimal("2587.61")
     assert offer.duration == timedelta(minutes=754)
     assert offer.transfers == 0
+    assert offer.service_number == "128М"
+    assert offer.carrier == "ФПК"
     assert offer.timezone_known is True
 
 

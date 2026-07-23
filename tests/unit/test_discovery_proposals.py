@@ -95,7 +95,7 @@ def activity(destination_id: str, index: int, **overrides) -> Activity:
 def content(destination_id: str = "kolomna", **destination_overrides) -> DestinationContent:
     return DestinationContent(
         destination=destination(destination_id, **destination_overrides),
-        activities=(activity(destination_id, 1), activity(destination_id, 2)),
+        activities=tuple(activity(destination_id, index) for index in range(1, 5)),
         evidence=(evidence(destination_id),),
         catalog_version="v1",
     )
@@ -211,7 +211,7 @@ def test_itinerary_uses_real_city_window_and_splits_anchors_across_days() -> Non
     result = ItineraryBuilder().build(content(), trip, verified_at=NOW)
 
     scheduled = [item for day in result.days for item in day.activities]
-    assert len(scheduled) == 2
+    assert len(scheduled) == 3
     assert scheduled[0].starts_at >= trip.combination.outbound.arrival_at + timedelta(hours=1)
     assert scheduled[-1].ends_at <= (
         trip.combination.return_offer.departure_at - timedelta(minutes=90)
@@ -220,6 +220,7 @@ def test_itinerary_uses_real_city_window_and_splits_anchors_across_days() -> Non
         date(2026, 8, 22),
         date(2026, 8, 23),
     }
+    assert [len(day.activities) + len(day.suggestions) for day in result.days] == [2, 2]
     assert result.content_complete
 
 
@@ -240,7 +241,8 @@ def test_itinerary_excludes_expired_dynamic_content_and_unknown_timezone() -> No
         option(timezone_known=False),
         verified_at=NOW,
     )
-    assert not unknown_timezone.content_complete
+    assert unknown_timezone.content_complete
+    assert [len(day.suggestions) for day in unknown_timezone.days] == [2, 2]
     assert "Часовой пояс" in unknown_timezone.warnings[0]
 
 
@@ -382,6 +384,42 @@ async def test_proposal_builder_isolates_content_failure_and_projects_only_safe_
     assert "checkout_data" not in serialized
     assert facts[0].transport_facts[0].startswith("Туда: rail")
     assert facts[0].transport_facts[1].startswith("Обратно: bus")
+
+
+@pytest.mark.asyncio
+async def test_ai_generated_program_is_labeled_and_never_renarrated_as_grounded() -> None:
+    ai_content = DestinationContent(
+        destination=destination("city_a", evidence_ids=frozenset()),
+        activities=(
+            activity("city_a", 1, evidence_ids=frozenset()),
+            activity("city_a", 2, evidence_ids=frozenset()),
+        ),
+        evidence=(),
+        catalog_version="dynamic_v1",
+        is_ai_generated=True,
+    )
+    result = await ProposalBuilder(
+        ContentGateway({"city_a": ai_content}),
+        FakeClock(),
+    ).build(feasibility("city_a"))
+    recommendation = result.recommendations[0]
+
+    class MustNotRunNarrator:
+        async def narrate(self, proposals, *, context):
+            pytest.fail("ungrounded AI content must not be sent for grounded narration")
+
+    copies = await GroundedProposalNarration(  # type: ignore[arg-type]
+        MustNotRunNarrator()
+    ).narrate(
+        result.recommendations,
+        context=ConversationContext(timezone="Europe/Moscow", current_date="2026-07-21"),
+    )
+
+    assert recommendation.proposal.content_grounded is False
+    assert recommendation.proposal.evidence_ids == frozenset()
+    assert len(recommendation.proposal.suggested_activities) == 2
+    assert "подобраны AI" in recommendation.proposal.trade_off
+    assert copies[0].evidence_ids == frozenset()
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,5 @@
+from datetime import date
+
 from app.domain.models import HotelMode
 from app.services.explicit_constraints import (
     explicit_hotel_mode,
@@ -5,6 +7,7 @@ from app.services.explicit_constraints import (
     explicitly_mentions_river,
     explicitly_relaxed,
     extract_explicit_party,
+    resolved_hotel_mode,
 )
 
 
@@ -23,3 +26,24 @@ def test_exact_qa_comfort_and_hotel_phrases_are_detected() -> None:
     assert explicitly_relaxed(text)
     assert explicitly_forbids_night_travel(text)
     assert explicit_hotel_mode(text) is HotelMode.FORBIDDEN
+
+
+def test_overnight_trip_requires_hotel_by_default_but_explicit_no_wins() -> None:
+    assert (
+        resolved_hotel_mode(
+            "Хочу уехать на два дня",
+            HotelMode.FORBIDDEN,
+            departure_date=date(2026, 8, 29),
+            return_date=date(2026, 8, 30),
+        )
+        is HotelMode.REQUIRED
+    )
+    assert (
+        resolved_hotel_mode(
+            "Хочу уехать на два дня без отеля",
+            HotelMode.REQUIRED,
+            departure_date=date(2026, 8, 29),
+            return_date=date(2026, 8, 30),
+        )
+        is HotelMode.FORBIDDEN
+    )

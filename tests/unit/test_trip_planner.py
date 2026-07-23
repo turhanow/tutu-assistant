@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 import pytest
@@ -8,7 +8,9 @@ from app.adapters.mcp_mappers import map_hotel_search, map_transport_search
 from app.domain.models import (
     HotelMode,
     HotelPreferences,
+    TimeWindow,
     TransportMode,
+    TransportPreferences,
     TripRequest,
     TutuCapabilities,
 )
@@ -226,3 +228,44 @@ async def test_transport_stage_is_reused_without_duplicate_provider_calls() -> N
     assert completed.options
     assert len([item for item in gateway.calls if item[0] == "search_transport"]) == 2
     assert len([item for item in gateway.calls if item[0] == "search_hotels"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_soft_time_windows_are_relaxed_only_to_fill_comparison_options() -> None:
+    request, outbound, return_offer, hotel, capabilities = inputs()
+    request = request.model_copy(
+        update={
+            "transport": TransportPreferences(
+                departure_window=TimeWindow(from_time=time(18), to_time=time(23)),
+                return_window=TimeWindow(from_time=time(17), to_time=time(20)),
+            )
+        }
+    )
+    early = outbound.model_copy(
+        update={
+            "provider_id": "early",
+            "departure_at": outbound.departure_at.replace(hour=10),
+        }
+    )
+    noon = outbound.model_copy(
+        update={
+            "provider_id": "noon",
+            "departure_at": outbound.departure_at.replace(hour=12),
+        }
+    )
+    gateway = FakeTutuGateway(capabilities=capabilities, hotels=[hotel])
+
+    async def directional_transport(query):
+        return [outbound, early, noon] if query.origin == "Москва" else [return_offer]
+
+    gateway.search_transport = directional_transport
+
+    result = await TripPlanner(gateway, FakeClock()).search_trip(request)
+
+    assert len(result.options) == 3
+    relaxed = [
+        item
+        for item in result.options
+        if "Время отправления выходит" in " ".join(item.combination.warnings)
+    ]
+    assert len(relaxed) == 2

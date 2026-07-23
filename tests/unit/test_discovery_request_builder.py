@@ -68,28 +68,39 @@ def test_builder_preserves_explicit_profile_and_uses_safe_scope_defaults() -> No
     assert request.travelers.adults == 1
     assert request.budget is None
     assert request.experience.road_tolerance.allow_night_travel is False
-    assert request.hotel_mode is HotelMode.OPTIONAL
+    assert request.hotel_mode is HotelMode.REQUIRED
 
 
 def test_builder_preserves_explicit_no_hotel_constraint() -> None:
     request = build_discovery_request(
-        complete_draft(hotel_mode=HotelMode.FORBIDDEN),
+        complete_draft(
+            return_date=date(2026, 8, 22),
+            hotel_mode=HotelMode.FORBIDDEN,
+        ),
         today=TODAY,
     )
 
     assert request.hotel_mode is HotelMode.FORBIDDEN
 
 
-def test_builder_never_silently_assumes_hotel_when_preference_is_unknown() -> None:
+def test_builder_turns_overnight_dates_into_day_trip_after_explicit_hotel_refusal() -> None:
+    request = build_discovery_request(
+        complete_draft(hotel_mode=HotelMode.FORBIDDEN),
+        today=TODAY,
+    )
+
+    assert request.dates.start == request.dates.end
+    assert request.hotel_mode is HotelMode.FORBIDDEN
+
+
+def test_builder_defaults_overnight_trip_to_hotel_when_preference_is_unknown() -> None:
     draft = complete_draft(hotel_mode=None)
 
-    with pytest.raises(DiscoveryInputError, match="hotel_mode") as raised:
-        build_discovery_request(draft, today=TODAY)
+    request = build_discovery_request(draft, today=TODAY)
 
-    assert raised.value.field == "hotel_mode"
-    questions = plan_clarifications(draft)
-    assert questions[0].field == "hotel_mode"
-    assert "Нужен отель" in questions[0].text
+    assert request.hotel_mode is HotelMode.REQUIRED
+    assert "hotel_mode" not in missing_discovery_fields(draft)
+    assert not any(item.field == "hotel_mode" for item in plan_clarifications(draft))
 
 
 @pytest.mark.parametrize(
@@ -151,13 +162,13 @@ def test_clarification_policy_uses_optional_questions_after_critical_fields() ->
     assert plan_clarifications(complete_draft(), limit=0) == ()
 
 
-def test_required_clarification_does_not_append_optional_interview_questions() -> None:
+def test_overnight_hotel_default_allows_optional_interview_questions() -> None:
     draft = complete_draft(hotel_mode=None, budget=None)
 
     questions = plan_clarifications(draft, limit=3)
 
-    assert [item.field for item in questions] == ["hotel_mode"]
-    assert questions[0].required
+    assert [item.field for item in questions] == ["budget", "road_tolerance", "travelers"]
+    assert not any(item.required for item in questions)
 
 
 def test_explicit_relaxed_pace_is_enough_to_describe_discovery_motive() -> None:

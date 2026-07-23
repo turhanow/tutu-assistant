@@ -18,6 +18,7 @@ def test_spec_balance_score_examples() -> None:
     score_a = calculate_balance_score(
         cost_norm=Decimal("0"),
         duration_norm=Decimal(".40"),
+        city_time_penalty=Decimal("0"),
         transfers_penalty=Decimal("0"),
         night_penalty=Decimal("0"),
         awkward_time_penalty=Decimal(".25"),
@@ -26,14 +27,15 @@ def test_spec_balance_score_examples() -> None:
     score_b = calculate_balance_score(
         cost_norm=Decimal(".50"),
         duration_norm=Decimal("0"),
+        city_time_penalty=Decimal("0"),
         transfers_penalty=Decimal(".50"),
         night_penalty=Decimal(".25"),
         awkward_time_penalty=Decimal("0"),
         hotel_quality_penalty=Decimal(".10"),
     )
 
-    assert score_a == Decimal("0.1223")
-    assert score_b == Decimal("0.3020")
+    assert score_a == Decimal("0.0823")
+    assert score_b == Decimal("0.2520")
 
 
 def test_fastest_minimizes_time_in_transport_not_time_spent_in_city() -> None:
@@ -83,6 +85,31 @@ def test_confirmed_sort_preference_controls_first_unique_card() -> None:
     ranked = rank_options([cheap, fast], preferred=SortPreference.FASTEST)
 
     assert ranked[0].combination.signature == "fast"
+
+
+def test_balanced_option_values_useful_time_in_city_not_only_short_transport() -> None:
+    short_visit = _combination(
+        "short-visit",
+        outbound_departure=datetime(2026, 8, 21, 14, tzinfo=UTC),
+        outbound_hours=2,
+        return_departure=datetime(2026, 8, 22, 10, tzinfo=UTC),
+        return_hours=2,
+        price=Decimal("2000"),
+    )
+    long_visit = _combination(
+        "long-visit",
+        outbound_departure=datetime(2026, 8, 21, 8, tzinfo=UTC),
+        outbound_hours=2,
+        return_departure=datetime(2026, 8, 22, 18, tzinfo=UTC),
+        return_hours=2,
+        price=Decimal("2000"),
+    )
+
+    ranked = rank_options([short_visit, long_visit])
+    balanced = next(item for item in ranked if SortPreference.BALANCED in item.labels)
+
+    assert balanced.combination.signature == "long-visit"
+    assert long_visit.metrics.time_in_city > short_visit.metrics.time_in_city
 
 
 def test_ranking_fills_three_distinct_cards_when_one_option_wins_all_labels() -> None:

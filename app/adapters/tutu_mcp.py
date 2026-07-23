@@ -226,21 +226,29 @@ class TutuMcpAdapter:
         modes = [
             MODE_ARGUMENTS[mode] for mode in sorted(query.allowed_modes) if mode in MODE_ARGUMENTS
         ]
-        payload = await self._call(
-            "search_multitransport",
-            {
-                "origin": query.origin,
-                "destination": query.destination,
-                "departure_date": query.departure_date.isoformat(),
-                "adults": query.adults,
-                "modes": modes or None,
-                "price_max": float(query.max_price) if query.max_price is not None else None,
-                "page": 1,
-                "page_size": 5,
-                "view": "compact",
-            },
+        arguments = {
+            "origin": query.origin,
+            "destination": query.destination,
+            "departure_date": query.departure_date.isoformat(),
+            "adults": query.adults,
+            "modes": modes or None,
+            "price_max": float(query.max_price) if query.max_price is not None else None,
+            "page": 1,
+            "page_size": 5,
+            "view": "compact",
+        }
+        price_payload, time_payload = await asyncio.gather(
+            self._call(
+                "search_multitransport",
+                {**arguments, "optimize_for": "price"},
+            ),
+            self._call(
+                "search_multitransport",
+                {**arguments, "optimize_for": "time"},
+            ),
+            return_exceptions=True,
         )
-        return map_transport_search(payload)
+        return _merge_transport_searches((price_payload, time_payload))
 
     async def _search_targeted(
         self,
@@ -261,8 +269,12 @@ class TutuMcpAdapter:
             arguments["passengers"] = query.adults
         elif mode in {TransportMode.AVIA, TransportMode.BUS}:
             arguments["adults"] = query.adults
-        payload = await self._call(tool, arguments)
-        return map_transport_search(payload)
+        price_payload, duration_payload = await asyncio.gather(
+            self._call(tool, {**arguments, "sort": "price_asc"}),
+            self._call(tool, {**arguments, "sort": "duration_asc"}),
+            return_exceptions=True,
+        )
+        return _merge_transport_searches((price_payload, duration_payload))
 
     async def search_hotels(self, query: HotelSearchQuery) -> list[HotelOffer]:
         preferences = query.preferences
@@ -483,6 +495,20 @@ class TutuMcpPool:
             adapter = self._adapters[self._next]
             self._next = (self._next + 1) % len(self._adapters)
             return adapter
+
+
+def _merge_transport_searches(
+    results: tuple[dict[str, Any] | BaseException, ...],
+) -> list[TransportOffer]:
+    """Use every successful objective and fail only when all provider calls failed."""
+
+    payloads = [item for item in results if isinstance(item, dict)]
+    if not payloads:
+        error = next((item for item in results if isinstance(item, BaseException)), None)
+        if error is not None:
+            raise error
+        raise ProviderResponseError("Tutu returned no transport search payload")
+    return [offer for payload in payloads for offer in map_transport_search(payload)]
 
 
 def validate_required_capabilities(tools: tuple[ToolCapability, ...]) -> None:

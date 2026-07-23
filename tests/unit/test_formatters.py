@@ -84,13 +84,14 @@ def test_money_is_formatted_for_humans() -> None:
 def test_result_names_transport_for_each_direction() -> None:
     rendered = format_results(search_result())
 
-    assert "Туда: поезд ·" in rendered
-    assert "Обратно: поезд ·" in rendered
+    assert "Туда: поезд № 128М · ФПК ·" in rendered
+    assert "Обратно: поезд № 128М · ФПК ·" in rendered
+    assert "2 587,61 ₽" in rendered
     assert "В дороге:" in rendered
     assert "В городе:" in rendered
     assert "Проживание: 22 августа — 23 августа, 1 ночь" in rendered
     assert "rail" not in rendered
-    assert "В известную сумму входят: дорога туда, дорога обратно, отель" in rendered
+    assert "В предварительную сумму входят: дорога туда, дорога обратно, отель" in rendered
     assert "Не включено: питание, городской транспорт и активности" in rendered
 
 

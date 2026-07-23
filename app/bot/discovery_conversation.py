@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -38,7 +39,7 @@ from app.domain.errors import (
     TutuAssistantError,
     UnsupportedOriginError,
 )
-from app.domain.models import HotelMode, ParsedTripDraft, TripSearchResult
+from app.domain.models import HotelMode, ParsedTripDraft, TripCheckoutItem, TripSearchResult
 from app.ports.clock import Clock
 from app.ports.discovery_llm import ConversationContext, IntentExtractor
 from app.services.candidate_selector import CandidateSelector
@@ -70,6 +71,7 @@ _REVISION = "discovery_revision"
 _SHORTLIST = "discovery_shortlist"
 _FEASIBILITY = "discovery_feasibility"
 _PROPOSALS = "discovery_proposals"
+_CHECKOUT_ITEMS = "discovery_checkout_items"
 _REJECTED_INDEX = "discovery_rejected_index"
 _PENDING_FIELD = "discovery_pending_field"
 _ANALYTICS_FLOW_ID = "flow_id"
@@ -544,7 +546,15 @@ class DiscoveryConversation:
             )
         else:
             copies = fallback_proposal_copies(project_grounded_facts(proposals.recommendations))
-        messages = pack_html_sections(format_proposal_sections(proposals.recommendations, copies))
+        checkout_items = await self._resolve_inline_checkout_items(proposals, feasibility)
+        context.user_data[_CHECKOUT_ITEMS] = checkout_items
+        messages = pack_html_sections(
+            format_proposal_sections(
+                proposals.recommendations,
+                copies,
+                checkout_items,
+            )
+        )
         await self._track(
             "proposals_shown",
             context,
@@ -582,48 +592,47 @@ class DiscoveryConversation:
         ):
             await message.reply_text("Переход к оформлению для этого варианта недоступен.")
             return
-        destination_id = recommendation.proposal.candidate.destination.destination_id
-        snapshot = next(
-            (item for item in feasibility.snapshots if item.destination_id == destination_id),
-            None,
-        )
-        if snapshot is None or snapshot.trip_result is None:
+        selected = self._selected_trip_result(recommendation, feasibility)
+        if selected is None:
             await message.reply_text("Данные предложения устарели. Выполните повторную проверку.")
             return
-        selected = TripSearchResult(
-            request=snapshot.trip_result.request,
-            options=(recommendation.proposal.trip_option,),
-            failures=snapshot.trip_result.failures,
-            searched_at=snapshot.trip_result.searched_at,
-        )
         status = await message.reply_text(self._voice.progress("handoff", context.user_data))
-        try:
-            items = await self._handoff.create_checkout_items(selected, 0)
-        except (TutuAssistantError, ValueError, IndexError):
-            await status.edit_text(
-                "Ссылки уже неактуальны. Повторно проверьте вариант перед оформлением."
-            )
-            return
+        destination_id = recommendation.proposal.candidate.destination.destination_id
+        cached = context.user_data.get(_CHECKOUT_ITEMS)
+        items = cached.get(destination_id) if isinstance(cached, dict) else None
+        if not items:
+            try:
+                items = await self._handoff.create_checkout_items(selected, 0)
+            except (TutuAssistantError, TimeoutError, ValueError, IndexError):
+                await status.edit_text(
+                    "Ссылки уже неактуальны. Повторно проверьте вариант перед оформлением."
+                )
+                return
         buttons = [
             [
                 InlineKeyboardButton(
-                    (
-                        f"Открыть выбранное · {COMPONENT_LABELS[item.component]}"
-                        if TripHandoffService.is_offer_specific(item)
-                        else f"Смотреть все · {COMPONENT_LABELS[item.component]}"
-                    ),
+                    f"{TripHandoffService.button_prefix(item)} · "
+                    f"{COMPONENT_LABELS[item.component]}",
                     url=str(item.link.url),
                 )
             ]
             for item in items
         ]
-        has_broad_link = any(not TripHandoffService.is_offer_specific(item) for item in items)
-        link_scope = (
-            " Для кнопок «Смотреть все» откроется список на выбранную дату, потому что "
-            "Tutu не вернул прямую ссылку на конкретное предложение."
-            if has_broad_link
-            else " Каждая кнопка открывает выбранное предложение."
+        has_schedule_link = any(item.link.kind == "schedule_url" for item in items)
+        has_broad_link = any(
+            not TripHandoffService.is_offer_specific(item) and item.link.kind != "schedule_url"
+            for item in items
         )
+        link_scope = ""
+        if has_schedule_link:
+            link_scope += (
+                " Для электричек Tutu открывает расписание на выбранную дату, а не "
+                "конкретный рейс: сверьте время из рекомендации."
+            )
+        if has_broad_link:
+            link_scope += " Для остальных кнопок без deeplink откроется список вариантов."
+        if not has_schedule_link and not has_broad_link:
+            link_scope = " Кнопки ведут к выбранным билетам и отелю."
         await status.edit_text(
             "Проверьте актуальную цену и условия на Tutu. Компоненты могут оформляться "
             "отдельно; переход не резервирует места." + link_scope,
@@ -633,6 +642,57 @@ class DiscoveryConversation:
             "handoff_created",
             context,
             dimensions={"flow_type": "destination_unknown"},
+        )
+
+    async def _resolve_inline_checkout_items(
+        self,
+        proposals: DiscoveryProposalResult,
+        feasibility: DiscoveryFeasibilityResult,
+    ) -> dict[str, tuple[TripCheckoutItem, ...]]:
+        if self._handoff is None:
+            return {}
+
+        async def resolve(recommendation):
+            selected = self._selected_trip_result(recommendation, feasibility)
+            if selected is None:
+                return None
+            try:
+                items = await self._handoff.create_checkout_items(selected, 0)
+            except (TutuAssistantError, TimeoutError, ValueError, IndexError):
+                logger.warning("inline_checkout_link_unavailable", exc_info=True)
+                return None
+            destination_id = recommendation.proposal.candidate.destination.destination_id
+            return destination_id, tuple(items)
+
+        try:
+            async with asyncio.timeout(16):
+                resolved = await asyncio.gather(
+                    *(resolve(item) for item in proposals.recommendations)
+                )
+        except TimeoutError:
+            logger.warning("inline_checkout_links_timeout")
+            return {}
+        available: dict[str, tuple[TripCheckoutItem, ...]] = {}
+        for result in resolved:
+            if result is not None:
+                destination_id, items = result
+                available[destination_id] = items
+        return available
+
+    @staticmethod
+    def _selected_trip_result(recommendation, feasibility) -> TripSearchResult | None:
+        destination_id = recommendation.proposal.candidate.destination.destination_id
+        snapshot = next(
+            (item for item in feasibility.snapshots if item.destination_id == destination_id),
+            None,
+        )
+        if snapshot is None or snapshot.trip_result is None:
+            return None
+        return TripSearchResult(
+            request=snapshot.trip_result.request,
+            options=(recommendation.proposal.trip_option,),
+            failures=snapshot.trip_result.failures,
+            searched_at=snapshot.trip_result.searched_at,
         )
 
     def _recommendation(self, context, argument: str | None):
@@ -657,7 +717,7 @@ class DiscoveryConversation:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"План на два дня · {name}",
+                        f"План на 2 дня · {name}",
                         callback_data=self._callback(context, DiscoveryAction.DETAILS, str(index)),
                     ),
                     InlineKeyboardButton(

@@ -442,25 +442,29 @@ class TripConversation:
                 buttons = [
                     [
                         InlineKeyboardButton(
-                            (
-                                f"Открыть выбранное: {COMPONENT_LABELS[item.component]}"
-                                if TripHandoffService.is_offer_specific(item)
-                                else f"Смотреть все: {COMPONENT_LABELS[item.component]}"
-                            ),
+                            f"{TripHandoffService.button_prefix(item)}: "
+                            f"{COMPONENT_LABELS[item.component]}",
                             url=str(item.link.url),
                         )
                     ]
                     for item in items
                 ]
+                has_schedule_link = any(item.link.kind == "schedule_url" for item in items)
                 has_broad_link = any(
-                    not TripHandoffService.is_offer_specific(item) for item in items
+                    not TripHandoffService.is_offer_specific(item)
+                    and item.link.kind != "schedule_url"
+                    for item in items
                 )
-                link_scope = (
-                    " Для кнопок «Смотреть все» Tutu не вернул ссылку на конкретное "
-                    "предложение: откроется список на выбранную дату."
-                    if has_broad_link
-                    else " Каждая кнопка открывает выбранное предложение."
-                )
+                link_scope = ""
+                if has_schedule_link:
+                    link_scope += (
+                        " Для электричек Tutu открывает расписание на выбранную дату, "
+                        "поэтому сверьте время из рекомендации."
+                    )
+                if has_broad_link:
+                    link_scope += " Для ссылок без deeplink откроется список вариантов."
+                if not has_schedule_link and not has_broad_link:
+                    link_scope = " Кнопки ведут к выбранным билетам и отелю."
                 await status.edit_text(
                     "Вы перейдёте на Tutu для проверки актуальной цены и оформления. "
                     "Транспорт и отель могут оформляться отдельно; переход по ссылке "

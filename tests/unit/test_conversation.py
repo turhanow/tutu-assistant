@@ -151,7 +151,7 @@ async def test_short_form_followups_skip_llm_and_complete_deterministically() ->
     state = await conversation.intake(update_with_message(message("поездка")), context)
     assert state is State.FORM
 
-    for answer in ("Москва", "Казань", "21.08.2026", "23.08.2026", "нет"):
+    for answer in ("Москва", "Казань", "21.08.2026", "23.08.2026"):
         state = await conversation.form_input(
             update_with_message(message(answer)),
             context,
@@ -160,6 +160,8 @@ async def test_short_form_followups_skip_llm_and_complete_deterministically() ->
     assert state is State.CONFIRM
     assert len(parser.calls) == 1
     assert not planner.calls
+    assert context.user_data["trip_draft"].hotel_mode is None
+    assert build_trip_request(context.user_data["trip_draft"]).hotel.mode is HotelMode.REQUIRED
 
 
 @pytest.mark.asyncio
@@ -180,10 +182,9 @@ async def test_out_of_order_form_answers_merge_all_recognized_slots_without_stat
 
     for answer in (
         "Из Москвы",
-        "15–16 августа 2026",
         "Один взрослый",
         "Можно поезд или автобус",
-        "Нужен отель",
+        "15–16 августа 2026",
     ):
         state = await conversation.form_input(update_with_message(message(answer)), context)
 
@@ -195,7 +196,8 @@ async def test_out_of_order_form_answers_merge_all_recognized_slots_without_stat
     assert str(draft.return_date) == "2026-08-16"
     assert draft.adults == 1
     assert {item.value for item in draft.allowed_modes} == {"rail", "bus"}
-    assert draft.hotel_mode is HotelMode.REQUIRED
+    assert draft.hotel_mode is None
+    assert build_trip_request(draft).hotel.mode is HotelMode.REQUIRED
 
     state = await conversation.modify_text(
         update_with_message(message("До 20000 рублей")),

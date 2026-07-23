@@ -19,11 +19,13 @@ class ItineraryBuildResult:
 
     @property
     def activity_count(self) -> int:
-        return sum(len(day.activities) for day in self.days)
+        return sum(len(day.activities) + len(day.suggestions) for day in self.days)
 
     @property
     def content_complete(self) -> bool:
-        return self.activity_count >= 2
+        return bool(self.days) and all(
+            2 <= len(day.activities) + len(day.suggestions) <= 3 for day in self.days
+        )
 
 
 class ItineraryBuilder:
@@ -80,9 +82,23 @@ class ItineraryBuilder:
             or arrival.tzinfo is None
             or departure.tzinfo is None
         ):
+            dates = tuple(self._dates(arrival.date(), departure.date()))[: self._max_days]
+            allocations: list[list[Activity]] = [[] for _ in dates]
+            for index, activity in enumerate(activities[: len(dates) * 3]):
+                allocations[index % len(dates)].append(activity)
+            allocated_ids = {
+                activity.activity_id for allocation in allocations for activity in allocation
+            }
             return ItineraryBuildResult(
-                days=(DayPlan(date=arrival.date()),),
-                unscheduled_activity_ids=tuple(item.activity_id for item in activities),
+                days=tuple(
+                    DayPlan(date=plan_date, suggestions=tuple(allocation))
+                    for plan_date, allocation in zip(dates, allocations, strict=True)
+                ),
+                unscheduled_activity_ids=tuple(
+                    item.activity_id
+                    for item in activities
+                    if item.activity_id not in allocated_ids
+                ),
                 warnings=("Часовой пояс расписания не подтверждён",),
             )
 
@@ -91,15 +107,25 @@ class ItineraryBuilder:
         all_dates = tuple(self._dates(arrival.date(), departure.date()))
         dates = all_dates[: self._max_days]
         remaining = list(activities)
+        allocations: list[list[Activity]] = [[] for _ in dates]
+        if dates:
+            for index, activity in enumerate(remaining[: len(dates) * 3]):
+                allocations[index % len(dates)].append(activity)
+        allocated_ids = {
+            activity.activity_id for allocation in allocations for activity in allocation
+        }
+        remaining = [item for item in remaining if item.activity_id not in allocated_ids]
         days: list[DayPlan] = []
-        for plan_date in dates:
+        untimed: list[Activity] = []
+        for plan_date, allocation in zip(dates, allocations, strict=True):
             local_start = datetime.combine(plan_date, self._day_start, tzinfo=arrival.tzinfo)
             local_end = datetime.combine(plan_date, self._day_end, tzinfo=arrival.tzinfo)
             slot_start = max(local_start, available_from)
             slot_end = min(local_end, available_until)
             scheduled: list[ScheduledActivity] = []
+            suggestions: list[Activity] = []
             cursor = slot_start
-            for item in tuple(remaining):
+            for item in allocation:
                 activity_end = cursor + item.duration
                 if cursor < slot_end and activity_end <= slot_end:
                     scheduled.append(
@@ -109,9 +135,17 @@ class ItineraryBuilder:
                             ends_at=activity_end,
                         )
                     )
-                    remaining.remove(item)
                     cursor = activity_end + self._activity_gap
-            days.append(DayPlan(date=plan_date, activities=tuple(scheduled)))
+                else:
+                    suggestions.append(item)
+                    untimed.append(item)
+            days.append(
+                DayPlan(
+                    date=plan_date,
+                    activities=tuple(scheduled),
+                    suggestions=tuple(suggestions),
+                )
+            )
 
         if not days:
             days.append(DayPlan(date=arrival.date()))
@@ -123,7 +157,7 @@ class ItineraryBuilder:
         return ItineraryBuildResult(
             days=tuple(days),
             unscheduled_activity_ids=tuple(
-                [item.activity_id for item in remaining] + list(invalid_ids)
+                [item.activity_id for item in (*untimed, *remaining)] + list(invalid_ids)
             ),
             warnings=tuple(warnings),
         )

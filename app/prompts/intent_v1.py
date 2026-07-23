@@ -17,7 +17,11 @@ Rules:
 - destination_unknown when they ask where to go or describe only motive/interests/constraints;
 - event_led when a concrete event or visit is the central reason, whether destination is known;
 - resolve relative dates only from the supplied current date and timezone;
-- preserve explicit negations and do not infer hotel, transport, budget, pace, or night travel;
+- «в эти выходные» means the nearest usable Saturday-Sunday pair: use the current weekend
+  on Saturday, otherwise the next weekend;
+- for a trip spanning at least one night, hotel_mode=required by default; set forbidden only
+  when the user explicitly says they do not need a hotel;
+- preserve explicit negations and do not infer transport, budget, pace, or night travel;
 - preserve explicit adults, children and room counts without coercing them into product limits;
 - normalize river, rivers, waterfront and embankment interests to the canonical interest `river`;
 - map «без суеты», «спокойно» and equivalent calm-trip wording to pace=relaxed;

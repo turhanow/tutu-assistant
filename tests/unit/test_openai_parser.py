@@ -154,6 +154,30 @@ async def test_explicit_date_range_overrides_wrong_model_dates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_this_weekend_defaults_to_nearest_dates_and_hotel() -> None:
+    client = FakeClient(
+        [
+            extraction(
+                departure_date=date(2026, 9, 5),
+                return_date=date(2026, 9, 6),
+                hotel_mode=ExtractedHotelMode.FORBIDDEN,
+            )
+        ]
+    )
+    parser = OpenAIRequestParser(client)  # type: ignore[arg-type]
+
+    result = await parser.parse(
+        "Москва — Казань в эти выходные",
+        now=datetime(2026, 7, 22, tzinfo=UTC),
+        timezone="Europe/Moscow",
+    )
+
+    assert result.draft.departure_date == date(2026, 7, 25)
+    assert result.draft.return_date == date(2026, 7, 26)
+    assert result.draft.hotel_mode is HotelMode.REQUIRED
+
+
+@pytest.mark.asyncio
 async def test_unparseable_response_gets_exactly_one_repair_retry() -> None:
     client = FakeClient([None, extraction(origin=None)])
     parser = OpenAIRequestParser(client)  # type: ignore[arg-type]

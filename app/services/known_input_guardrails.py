@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from app.domain.models import ParsedTripDraft
 
@@ -101,7 +101,7 @@ def extract_explicit_trip_dates(
     *,
     today: date,
 ) -> tuple[date | None, date | None]:
-    """Prefer labelled leg dates, then an explicit range in its written order."""
+    """Prefer labelled dates, an explicit range, then a deterministic weekend."""
 
     explicit_year = re.search(r"\b(20\d{2})\b", text)
     default_year = int(explicit_year.group(1)) if explicit_year else today.year
@@ -110,7 +110,31 @@ def extract_explicit_trip_dates(
     explicit_range = extract_explicit_date_range(text, today=today)
     if explicit_range is not None and departure is None and returning is None:
         return explicit_range
+    if departure is None and returning is None and _requests_nearest_weekend(text):
+        return nearest_weekend(today)
     return departure, returning
+
+
+def nearest_weekend(today: date) -> tuple[date, date]:
+    """Return the nearest usable Saturday-Sunday pair in the user's local calendar."""
+
+    # On Saturday the current weekend is still usable. On Sunday a two-day trip can
+    # only start on the following Saturday.
+    days_until_saturday = (5 - today.weekday()) % 7
+    if today.weekday() == 6:
+        days_until_saturday = 6
+    saturday = today + timedelta(days=days_until_saturday)
+    return saturday, saturday + timedelta(days=1)
+
+
+def _requests_nearest_weekend(text: str) -> bool:
+    normalized = " ".join(text.casefold().replace("ё", "е").split())
+    return bool(
+        re.search(
+            r"\b(?:в эти выходные|на этих выходных|в ближайшие выходные|на ближайшие выходные)\b",
+            normalized,
+        )
+    )
 
 
 def extract_explicit_date_range(text: str, *, today: date) -> tuple[date, date] | None:

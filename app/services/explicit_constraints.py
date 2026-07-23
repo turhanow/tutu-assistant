@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
 from app.domain.models import HotelMode
 
@@ -57,6 +58,23 @@ def explicit_hotel_mode(text: str) -> HotelMode | None:
     if re.search(r"\b(?:нужен отель|отель нужен|с отелем)\b", normalized):
         return HotelMode.REQUIRED
     return None
+
+
+def resolved_hotel_mode(
+    text: str,
+    extracted: HotelMode | None,
+    *,
+    departure_date: date | None,
+    return_date: date | None,
+) -> HotelMode | None:
+    """Prefer explicit wording, then require a hotel for an overnight trip by default."""
+
+    explicit = explicit_hotel_mode(text)
+    if explicit is not None:
+        return explicit
+    if departure_date is not None and return_date is not None and return_date > departure_date:
+        return HotelMode.REQUIRED
+    return extracted
 
 
 def explicitly_relaxed(text: str) -> bool:

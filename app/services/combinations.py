@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from datetime import date, time
+from datetime import date, time, timedelta
 from decimal import Decimal
 
 from app.domain.errors import TutuAssistantError
@@ -25,8 +25,9 @@ from app.services.date_rules import (
 )
 from app.services.pricing import calculate_price
 
-MAX_OFFERS_PER_COMPONENT = 5
-MAX_TRANSPORT_PAIRS = 10
+MAX_TRANSPORT_OFFERS_PER_LEG = 10
+MAX_HOTEL_OFFERS = 5
+MAX_TRANSPORT_PAIRS = 24
 MAX_HOTELS_PER_PAIR = 2
 MAX_COMBINATIONS = 50
 
@@ -55,7 +56,7 @@ def build_combinations(
         hotels = _eligible_hotels(offers_for_stay, stay, request.hotel)
         if request.hotel.mode is HotelMode.REQUIRED and not hotels:
             continue
-        if request.hotel.mode is not HotelMode.REQUIRED:
+        if request.hotel.mode is not HotelMode.REQUIRED and stay is None:
             combination = _combination(request, outbound_offer, return_offer, None, None)
             if combination is not None:
                 combinations.append(combination)
@@ -75,14 +76,15 @@ def build_transport_pairs(
     return_offers: Sequence[TransportOffer],
 ) -> list[tuple[TransportOffer, TransportOffer]]:
     """Return the bounded set of feasible pairs used by all downstream searches."""
-    outbound = _dedupe_transport(outbound_offers)[:MAX_OFFERS_PER_COMPONENT]
-    returns = _dedupe_transport(return_offers)[:MAX_OFFERS_PER_COMPONENT]
-    return [
+    outbound = _dedupe_transport(outbound_offers)[:MAX_TRANSPORT_OFFERS_PER_LEG]
+    returns = _dedupe_transport(return_offers)[:MAX_TRANSPORT_OFFERS_PER_LEG]
+    feasible = [
         (outbound_offer, return_offer)
         for outbound_offer in outbound
         for return_offer in returns
         if _feasible_pair(request, outbound_offer, return_offer)
-    ][:MAX_TRANSPORT_PAIRS]
+    ]
+    return _diverse_transport_pairs(feasible)
 
 
 def required_hotel_stays(
@@ -151,7 +153,7 @@ def _eligible_hotels(
     if stay is None:
         return []
     eligible: list[HotelOffer] = []
-    for hotel in offers[:MAX_OFFERS_PER_COMPONENT]:
+    for hotel in offers[:MAX_HOTEL_OFFERS]:
         if hotel.check_in != stay.check_in or hotel.check_out != stay.check_out:
             continue
         if preferences.stars_min is not None and (
@@ -186,6 +188,72 @@ def _select_hotels(hotels: Sequence[HotelOffer]) -> list[HotelOffer]:
     if best_rated.offer_id != cheapest.offer_id:
         selected.append(best_rated)
     return selected[:MAX_HOTELS_PER_PAIR]
+
+
+def _diverse_transport_pairs(
+    pairs: Sequence[tuple[TransportOffer, TransportOffer]],
+) -> list[tuple[TransportOffer, TransportOffer]]:
+    """Keep cheap, fast and convenient pairs instead of truncating a Cartesian product."""
+
+    if not pairs:
+        return []
+    orderings = (
+        sorted(pairs, key=_pair_price_key),
+        sorted(pairs, key=_pair_duration_key),
+        sorted(pairs, key=_pair_convenience_key),
+    )
+    selected: list[tuple[TransportOffer, TransportOffer]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for position in range(len(pairs)):
+        for ordering in orderings:
+            pair = ordering[position]
+            signature = _pair_identity(pair)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            selected.append(pair)
+            if len(selected) == MAX_TRANSPORT_PAIRS:
+                return selected
+    return selected
+
+
+def _pair_price_key(pair: tuple[TransportOffer, TransportOffer]) -> tuple:
+    prices = (pair[0].price, pair[1].price)
+    return (
+        any(value is None for value in prices),
+        sum((value or Decimal(0) for value in prices), Decimal(0)),
+        *_pair_duration_key(pair),
+    )
+
+
+def _pair_duration_key(pair: tuple[TransportOffer, TransportOffer]) -> tuple:
+    return (
+        sum(
+            (offer.duration or (offer.arrival_at - offer.departure_at) for offer in pair),
+            start=timedelta(0),
+        ),
+        pair[0].departure_at,
+        pair[1].departure_at,
+    )
+
+
+def _pair_convenience_key(pair: tuple[TransportOffer, TransportOffer]) -> tuple:
+    transfers = sum(offer.transfers if offer.transfers is not None else 2 for offer in pair)
+    awkward_times = sum(
+        int(value.hour < 6) for offer in pair for value in (offer.departure_at, offer.arrival_at)
+    )
+    return (transfers, awkward_times, *_pair_duration_key(pair), *_pair_price_key(pair)[:2])
+
+
+def _pair_identity(
+    pair: tuple[TransportOffer, TransportOffer],
+) -> tuple[str, str, str, str]:
+    return (
+        pair[0].departure_at.isoformat(),
+        pair[0].arrival_at.isoformat(),
+        pair[1].departure_at.isoformat(),
+        pair[1].arrival_at.isoformat(),
+    )
 
 
 def _combination(

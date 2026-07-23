@@ -109,10 +109,22 @@ class ProposalBuilder:
         for day in itinerary.days:
             for scheduled in day.activities:
                 evidence_ids.update(scheduled.activity.evidence_ids)
-        if not evidence_ids:
+            for suggestion in day.suggestions:
+                evidence_ids.update(suggestion.evidence_ids)
+        if not evidence_ids and not content.is_ai_generated:
             raise ValueError("proposal has no fresh destination evidence")
-        if not itinerary.content_complete:
+        content_grounded = bool(evidence_ids)
+        combination_warning = (
+            option.combination.warnings[0] if option.combination.warnings else None
+        )
+        if not content_grounded:
+            trade_off = "Идеи программы подобраны AI; проверьте часы работы и условия"
+            if combination_warning:
+                trade_off = f"{combination_warning} {trade_off}"
+        elif not itinerary.content_complete:
             trade_off = "Программа неполная: не удалось разместить две проверенные активности"
+        elif combination_warning:
+            trade_off = combination_warning
         elif cost.unknown_components:
             trade_off = "Часть расходов пока неизвестна; проверьте её перед бронированием"
         else:
@@ -120,12 +132,19 @@ class ProposalBuilder:
         return WeekendProposal(
             candidate=candidate,
             trip_option=option,
+            trip_alternatives=tuple(
+                item
+                for item in snapshot.trip_result.options
+                if item.combination.signature != option.combination.signature
+            ),
             days=itinerary.days,
             cost=cost,
             verified_at=snapshot.verified_at,
             evidence_ids=frozenset(evidence_ids),
+            content_grounded=content_grounded,
             trade_off=trade_off,
             content_complete=itinerary.content_complete,
+            suggested_activities=content.activities[:4],
         )
 
 
@@ -163,6 +182,8 @@ class GroundedProposalNarration:
         facts = project_grounded_facts(recommendations)
         if not facts:
             return ()
+        if any(not item.evidence_ids for item in facts):
+            return fallback_proposal_copies(facts)
         try:
             copies = tuple(await self._narrator.narrate(facts, context=context))
         except (LlmParseError, LlmProviderError, TimeoutError):
@@ -215,7 +236,11 @@ def _project_one(
         destination_name=proposal.candidate.destination.name,
         match_reasons=proposal.candidate.match_reasons,
         day_activity_names=tuple(
-            tuple(item.activity.name for item in day.activities) for day in proposal.days
+            tuple(
+                [item.activity.name for item in day.activities]
+                + [item.name for item in day.suggestions]
+            )
+            for day in proposal.days
         ),
         transport_facts=(
             _transport_fact("Туда", combination.outbound),

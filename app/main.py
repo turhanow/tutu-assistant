@@ -16,6 +16,8 @@ from app.adapters.file_catalog import (
     FileDestinationCatalog,
     FileTravelContentGateway,
 )
+from app.adapters.hybrid_catalog import HybridDestinationCatalog, HybridTravelContentGateway
+from app.adapters.openai_destination_discovery import OpenAIDestinationDiscovery
 from app.adapters.resilient_tutu import ProtectedTutuGateway
 from app.adapters.sqlite_feedback import SqliteFeedbackSink
 from app.adapters.tutu_mcp import TutuMcpPool
@@ -122,7 +124,20 @@ def build_application(settings: Settings) -> Application:
         voice=voice,
     )
     catalog_repository = FileCatalogRepository.from_path(settings.destination_catalog_path)
-    selector = CandidateSelector(FileDestinationCatalog(catalog_repository))
+    file_catalog = FileDestinationCatalog(catalog_repository)
+    file_content = FileTravelContentGateway(catalog_repository)
+    content_gateway = file_content
+    candidate_catalog = file_catalog
+    if settings.dynamic_discovery_enabled:
+        dynamic_discovery = OpenAIDestinationDiscovery(
+            llm.client,
+            clock,
+            model=settings.openai_model,
+            timeout_seconds=settings.dynamic_discovery_timeout_seconds,
+        )
+        candidate_catalog = HybridDestinationCatalog(dynamic_discovery, file_catalog)
+        content_gateway = HybridTravelContentGateway(dynamic_discovery, file_content)
+    selector = CandidateSelector(candidate_catalog)
     discovery_planner = DiscoveryPlanner(
         DestinationFeasibilityService(planner),
         clock,
@@ -133,7 +148,7 @@ def build_application(settings: Settings) -> Application:
         llm.intent_extractor,
         selector,
         discovery_planner,
-        ProposalBuilder(FileTravelContentGateway(catalog_repository), clock),
+        ProposalBuilder(content_gateway, clock),
         GroundedProposalNarration(llm.proposal_narrator),
         clock,
         timezone=settings.app_timezone,

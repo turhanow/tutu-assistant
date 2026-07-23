@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -89,6 +90,25 @@ class DiscoveryRequest(DomainModel):
     experience: ExperienceProfile = ExperienceProfile()
     transport: TransportPreferences = TransportPreferences()
 
+    @model_validator(mode="before")
+    @classmethod
+    def enforce_hotel_for_overnight_trip(cls, value):
+        if not isinstance(value, Mapping):
+            return value
+        dates = value.get("dates")
+        date_range = dates if isinstance(dates, DateRange) else DateRange.model_validate(dates)
+        mode = HotelMode(value.get("hotel_mode", HotelMode.OPTIONAL))
+        overnight = date_range.end > date_range.start
+        if overnight and mode is HotelMode.FORBIDDEN:
+            date_range = date_range.model_copy(update={"end": date_range.start})
+            overnight = False
+        if not overnight and mode is HotelMode.REQUIRED:
+            raise ValueError("a same-day discovery trip cannot require a hotel")
+        normalized = dict(value)
+        normalized["dates"] = date_range
+        normalized["hotel_mode"] = HotelMode.REQUIRED if overnight else mode
+        return normalized
+
 
 class DiscoveryDraft(DomainModel):
     origin: str | None = Field(default=None, max_length=200)
@@ -135,7 +155,7 @@ class DestinationCandidate(DomainModel):
 
 class CandidateShortlist(DomainModel):
     request: DiscoveryRequest
-    candidates: tuple[DestinationCandidate, ...] = Field(max_length=5)
+    candidates: tuple[DestinationCandidate, ...] = Field(max_length=8)
     catalog_version: str = Field(min_length=1, max_length=50)
     score_version: str = Field(min_length=1, max_length=50)
 
@@ -184,7 +204,7 @@ class FeasibilitySnapshot(DomainModel):
 
 class DiscoveryFeasibilityResult(DomainModel):
     shortlist: CandidateShortlist
-    snapshots: tuple[FeasibilitySnapshot, ...] = Field(max_length=5)
+    snapshots: tuple[FeasibilitySnapshot, ...] = Field(max_length=8)
     completed_at: datetime
 
     @model_validator(mode="after")
@@ -238,6 +258,7 @@ class ScheduledActivity(DomainModel):
 class DayPlan(DomainModel):
     date: date
     activities: tuple[ScheduledActivity, ...] = ()
+    suggestions: tuple[Activity, ...] = Field(default=(), max_length=3)
 
     @model_validator(mode="after")
     def validate_schedule(self) -> DayPlan:
@@ -247,26 +268,48 @@ class DayPlan(DomainModel):
                 raise ValueError("day plan activities cannot overlap")
         if any(item.starts_at.date() != self.date for item in self.activities):
             raise ValueError("activity must start on the day plan date")
+        activity_ids = [item.activity.activity_id for item in self.activities]
+        suggestion_ids = [item.activity_id for item in self.suggestions]
+        if len(suggestion_ids) != len(set(suggestion_ids)):
+            raise ValueError("day suggestions must be unique")
+        if set(activity_ids).intersection(suggestion_ids):
+            raise ValueError("scheduled activities cannot be repeated as suggestions")
         return self
 
 
 class WeekendProposal(DomainModel):
     candidate: DestinationCandidate
     trip_option: RankedTripOption
+    trip_alternatives: tuple[RankedTripOption, ...] = Field(default=(), max_length=3)
     days: tuple[DayPlan, ...] = Field(min_length=1, max_length=4)
     cost: CostBreakdown
     verified_at: datetime
-    evidence_ids: frozenset[ContentId] = Field(min_length=1)
+    evidence_ids: frozenset[ContentId] = frozenset()
+    content_grounded: bool = True
     trade_off: str = Field(min_length=1, max_length=300)
     content_complete: bool
+    suggested_activities: tuple[Activity, ...] = Field(default=(), max_length=4)
 
     @model_validator(mode="after")
     def validate_proposal(self) -> WeekendProposal:
         if self.verified_at.tzinfo is None:
             raise ValueError("proposal verified_at must be timezone-aware")
-        activity_count = sum(len(day.activities) for day in self.days)
-        if self.content_complete and activity_count < 2:
-            raise ValueError("complete proposal requires at least two activities")
+        activity_count = sum(len(day.activities) + len(day.suggestions) for day in self.days)
+        if self.content_complete and any(
+            not 2 <= len(day.activities) + len(day.suggestions) <= 3 for day in self.days
+        ):
+            raise ValueError("complete proposal requires two or three activities per day")
+        if self.content_grounded and not self.evidence_ids:
+            raise ValueError("grounded proposal requires evidence")
+        if not self.content_grounded and self.evidence_ids:
+            raise ValueError("AI-generated proposal cannot claim evidence")
+        if not self.suggested_activities and activity_count == 0:
+            raise ValueError("proposal requires at least one activity suggestion")
+        signatures = [item.combination.signature for item in self.trip_alternatives]
+        if len(signatures) != len(set(signatures)):
+            raise ValueError("trip alternatives must be unique")
+        if self.trip_option.combination.signature in signatures:
+            raise ValueError("selected trip option cannot be repeated as an alternative")
         return self
 
 
@@ -308,7 +351,7 @@ class ProposalCopy(DomainModel):
     title: str = Field(min_length=1, max_length=120)
     reason: str = Field(min_length=1, max_length=500)
     trade_off: str = Field(min_length=1, max_length=300)
-    evidence_ids: frozenset[ContentId] = Field(min_length=1)
+    evidence_ids: frozenset[ContentId] = frozenset()
 
 
 class GroundedProposalFacts(DomainModel):
@@ -323,4 +366,4 @@ class GroundedProposalFacts(DomainModel):
     estimated_cost: str | None = Field(default=None, max_length=100)
     unknown_components: tuple[str, ...] = ()
     trade_off: str = Field(min_length=1, max_length=300)
-    evidence_ids: frozenset[ContentId] = Field(min_length=1)
+    evidence_ids: frozenset[ContentId] = frozenset()

@@ -9,6 +9,7 @@ from app.domain.models import (
     CheckoutLink,
     HotelOffer,
     OfferDetails,
+    TransportMode,
     TransportOffer,
     TripCheckoutItem,
     TripComponent,
@@ -67,12 +68,21 @@ class TripHandoffService:
         if offer.provider_url is not None:
             # Search responses already carry the most specific URL for this exact offer.
             # Prefer it over rebuilding a URL that may degrade to a day-level listing.
-            link = CheckoutLink(url=offer.provider_url, kind="direct_offer")
+            kind = (
+                "schedule_url"
+                if isinstance(offer, TransportOffer) and offer.mode is TransportMode.ETRAIN
+                else "hotel_page"
+                if isinstance(offer, HotelOffer)
+                else "direct_offer"
+            )
+            link = CheckoutLink(url=offer.provider_url, kind=kind)
         else:
             try:
                 link = await self._gateway.create_checkout_link(offer.offer_ref)
             except ProviderError:
                 return None
+            if isinstance(offer, TransportOffer) and offer.mode is TransportMode.ETRAIN:
+                link = link.model_copy(update={"kind": "schedule_url"})
         self._require_tutu_host(link)
         return TripCheckoutItem(component=component, link=link)
 
@@ -84,7 +94,22 @@ class TripHandoffService:
 
     @staticmethod
     def is_offer_specific(item: TripCheckoutItem) -> bool:
-        return item.link.kind in {"direct_offer", "deeplink", "checkout_deeplink"}
+        return item.link.kind in {
+            "direct_offer",
+            "hotel_page",
+            "deeplink",
+            "checkout_deeplink",
+        }
+
+    @staticmethod
+    def button_prefix(item: TripCheckoutItem) -> str:
+        if item.link.kind == "schedule_url":
+            return "Открыть расписание"
+        if item.component is TripComponent.HOTEL and TripHandoffService.is_offer_specific(item):
+            return "Открыть выбранный отель"
+        if TripHandoffService.is_offer_specific(item):
+            return "Открыть выбранный билет"
+        return "Смотреть варианты"
 
     def _offer(
         self,

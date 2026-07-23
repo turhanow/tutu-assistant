@@ -32,9 +32,18 @@ def test_minimal_trip_request_has_p0_defaults() -> None:
     request = trip_request(budget="25000.50")
 
     assert request.travelers == TravelerComposition(adults=1, children=0, rooms=1)
-    assert request.hotel.mode is HotelMode.OPTIONAL
+    assert request.hotel.mode is HotelMode.REQUIRED
     assert request.budget == Decimal("25000.50")
     assert request.currency == "RUB"
+
+
+def test_overnight_trip_normalizes_optional_hotel_and_refusal_to_day_trip() -> None:
+    optional = trip_request(hotel=HotelPreferences(mode=HotelMode.OPTIONAL))
+
+    assert optional.hotel.mode is HotelMode.REQUIRED
+    without_hotel = trip_request(hotel=HotelPreferences(mode=HotelMode.FORBIDDEN))
+    assert without_hotel.return_date == without_hotel.departure_date
+    assert without_hotel.hotel.mode is HotelMode.FORBIDDEN
 
 
 @pytest.mark.parametrize(

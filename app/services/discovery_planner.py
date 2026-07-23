@@ -17,8 +17,8 @@ from app.services.destination_feasibility import (
     DestinationPreparation,
 )
 
-MAX_DESTINATIONS = 5
-MAX_HOTEL_DESTINATIONS = 3
+MAX_DESTINATIONS = 8
+MIN_VERIFIED_DESTINATIONS = 3
 
 
 class DiscoveryPlanner:
@@ -58,10 +58,19 @@ class DiscoveryPlanner:
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 prepared_items = await asyncio.gather(*(prepare(item) for item in candidates))
-                finalists = [item for item in prepared_items if item.is_transport_feasible][
-                    :MAX_HOTEL_DESTINATIONS
-                ]
-                verified = await asyncio.gather(*(verify(item) for item in finalists))
+                finalists = [item for item in prepared_items if item.is_transport_feasible]
+                verified: list[FeasibilitySnapshot] = []
+                for offset in range(0, len(finalists), self._max_concurrency):
+                    batch = finalists[offset : offset + self._max_concurrency]
+                    verified.extend(await asyncio.gather(*(verify(item) for item in batch)))
+                    successful = sum(
+                        item.status in {FeasibilityStatus.VERIFIED, FeasibilityStatus.PARTIAL}
+                        and item.trip_result is not None
+                        and bool(item.trip_result.options)
+                        for item in verified
+                    )
+                    if successful >= MIN_VERIFIED_DESTINATIONS:
+                        break
                 verified_by_id = {item.destination_id: item for item in verified}
                 snapshots: list[FeasibilitySnapshot] = []
                 for prepared in prepared_items:

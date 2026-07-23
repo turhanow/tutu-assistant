@@ -37,8 +37,14 @@ class FakeClock:
 
 
 class MultiDestinationGateway:
-    def __init__(self, *, unavailable: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        unavailable: set[str] | None = None,
+        hotels_unavailable: set[str] | None = None,
+    ) -> None:
         self.unavailable = unavailable or set()
+        self.hotels_unavailable = hotels_unavailable or set()
         self.transport_calls = []
         self.hotel_calls = []
 
@@ -70,6 +76,8 @@ class MultiDestinationGateway:
 
     async def search_hotels(self, query):
         self.hotel_calls.append(query)
+        if query.city in self.hotels_unavailable:
+            return []
         return [
             HotelOffer(
                 hotel_id=f"hotel-{query.city}",
@@ -127,7 +135,13 @@ def planner(gateway: MultiDestinationGateway) -> DiscoveryPlanner:
 @pytest.mark.asyncio
 async def test_discovery_without_hotel_never_calls_hotel_provider() -> None:
     gateway = MultiDestinationGateway()
-    result = await planner(gateway).verify(shortlist(1, hotel_mode=HotelMode.FORBIDDEN))
+    result = await planner(gateway).verify(
+        shortlist(
+            1,
+            dates=DateRange(start=date(2026, 8, 22), end=date(2026, 8, 22)),
+            hotel_mode=HotelMode.FORBIDDEN,
+        )
+    )
 
     assert result.snapshots
     assert not gateway.hotel_calls
@@ -195,6 +209,24 @@ async def test_one_unavailable_destination_does_not_cancel_other_results() -> No
     assert by_id["city_0"].status is FeasibilityStatus.VERIFIED
     assert sum(item.status is FeasibilityStatus.VERIFIED for item in result.snapshots) == 3
     assert len(gateway.hotel_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_planner_checks_later_candidates_until_three_complete_options_exist() -> None:
+    gateway = MultiDestinationGateway(
+        hotels_unavailable={"Город 0", "Город 1"},
+    )
+
+    result = await planner(gateway).verify(shortlist(count=6))
+
+    verified = [
+        item for item in result.snapshots if item.status is FeasibilityStatus.VERIFIED
+    ]
+    assert len(verified) >= 3
+    assert len(gateway.hotel_calls) == 6
+    assert {"city_2", "city_3", "city_4"}.issubset(
+        {item.destination_id for item in verified}
+    )
 
 
 @pytest.mark.asyncio
@@ -282,7 +314,7 @@ async def test_no_night_constraint_filters_overnight_transport_before_hotel_call
     result = await planner(gateway).verify(
         shortlist(
             1,
-            hotel_mode=HotelMode.FORBIDDEN,
+            hotel_mode=HotelMode.REQUIRED,
             experience=ExperienceProfile(
                 interests={"river", "walking"},
                 road_tolerance=RoadTolerance(allow_night_travel=False),

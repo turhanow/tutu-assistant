@@ -13,6 +13,7 @@ from app.domain.models import (
     HotelSearchQuery,
     TransportMode,
     TransportOffer,
+    TransportPreferences,
     TransportSearchQuery,
     TripRequest,
     TripSearchFailure,
@@ -202,6 +203,41 @@ class TripPlanner:
             return_offers,
             hotel_offers_by_stay=hotels_by_stay,
         )
+        if len(combinations) < 3 and (
+            effective_request.transport.departure_window is not None
+            or effective_request.transport.return_window is not None
+        ):
+            relaxed_request = effective_request.model_copy(
+                update={
+                    "transport": TransportPreferences(
+                        allowed_modes=effective_request.transport.allowed_modes,
+                        max_transfers=effective_request.transport.max_transfers,
+                    )
+                }
+            )
+            relaxed = build_combinations(
+                relaxed_request,
+                outbound,
+                return_offers,
+                hotel_offers_by_stay=hotels_by_stay,
+            )
+            known_signatures = {item.signature for item in combinations}
+            for item in relaxed:
+                if item.signature in known_signatures:
+                    continue
+                combinations.append(
+                    item.model_copy(
+                        update={
+                            "warnings": (
+                                *item.warnings,
+                                "Время отправления выходит за предпочтительное окно.",
+                            )
+                        }
+                    )
+                )
+                known_signatures.add(item.signature)
+                if len(combinations) >= 3:
+                    break
         over_budget = False
         if not combinations and request.budget is not None:
             without_budget = build_combinations(

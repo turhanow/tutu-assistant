@@ -98,6 +98,8 @@ def map_transport_search(payload: dict[str, Any]) -> list[TransportOffer]:
                     price=price,
                     currency=currency,
                     transfers=_transfers(row),
+                    service_number=_service_number(row, checkout_ref),
+                    carrier=_first_carrier(row),
                     # search_results_url is not an offer-specific handoff and must not be
                     # presented as if it opens the recommended ticket.
                     provider_url=row.get("checkout_url"),
@@ -210,6 +212,40 @@ def _location_name(value: Any, field: str) -> str:
 
 def _optional_string(value: Any) -> str | None:
     return str(value) if value is not None else None
+
+
+def _service_number(row: dict[str, Any], checkout_ref: dict[str, Any]) -> str | None:
+    for value in (
+        checkout_ref.get("train_number"),
+        row.get("train_number"),
+        checkout_ref.get("flight_number"),
+        row.get("flight_number"),
+        _first_segment_value(row, "voyage_no"),
+    ):
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _first_carrier(row: dict[str, Any]) -> str | None:
+    carriers = row.get("carriers")
+    if isinstance(carriers, list) and carriers and str(carriers[0]).strip():
+        return str(carriers[0]).strip()
+    value = _first_segment_value(row, "carrier")
+    return str(value).strip() if value is not None and str(value).strip() else None
+
+
+def _first_segment_value(row: dict[str, Any], key: str) -> Any:
+    legs = row.get("legs")
+    if not isinstance(legs, list):
+        return None
+    for leg in legs:
+        if not isinstance(leg, dict) or not isinstance(leg.get("segments"), list):
+            continue
+        for segment in leg["segments"]:
+            if isinstance(segment, dict) and segment.get(key) is not None:
+                return segment[key]
+    return None
 
 
 def _duration(value: Any) -> timedelta | None:

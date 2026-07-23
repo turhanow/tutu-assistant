@@ -15,7 +15,7 @@ from app.ports.catalog import DestinationCatalog
 
 SCORE_VERSION = "candidate_v1"
 MAX_POOL_SIZE = 12
-MAX_SHORTLIST_SIZE = 5
+MAX_SHORTLIST_SIZE = 8
 
 TAG_ALIASES = {
     "architecture": "architecture",
@@ -151,13 +151,15 @@ class CandidateSelector:
         ).quantize(Decimal("0.0001"))
 
         reasons: list[str] = []
+        if profile.activity_highlights:
+            reasons.append(
+                "Под запрос подходят: " + "; ".join(profile.activity_highlights[:2])
+            )
         if overlap:
             labels = ", ".join(TAG_LABELS.get(tag, tag) for tag in sorted(overlap)[:2])
             reasons.append(f"Подходит по интересам: {labels}")
-        if duration_score >= Decimal("0.8"):
-            reasons.append("Удобный формат для короткой поездки")
         if not reasons:
-            reasons.append("Есть проверенные идеи для короткой программы")
+            reasons.append(f"Можно исследовать {profile.name} в своём темпе")
         return DestinationCandidate(
             destination=profile,
             match_score=score,

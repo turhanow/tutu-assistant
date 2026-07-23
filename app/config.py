@@ -105,6 +105,13 @@ class Settings(BaseSettings):
     tone_of_voice_v2_enabled: bool = Field(default=True, alias="TONE_OF_VOICE_V2_ENABLED")
     controlled_delight_enabled: bool = Field(default=True, alias="CONTROLLED_DELIGHT_ENABLED")
     discovery_enabled: bool = Field(default=True, alias="DISCOVERY_ENABLED")
+    dynamic_discovery_enabled: bool = Field(default=True, alias="DYNAMIC_DISCOVERY_ENABLED")
+    dynamic_discovery_timeout_seconds: float = Field(
+        default=30,
+        alias="DYNAMIC_DISCOVERY_TIMEOUT_SECONDS",
+        ge=5,
+        le=30,
+    )
     feedback_enabled: bool = Field(default=True, alias="FEEDBACK_ENABLED")
     analytics_enabled: bool = Field(default=True, alias="ANALYTICS_ENABLED")
     provider_max_inflight: int = Field(default=8, alias="PROVIDER_MAX_INFLIGHT", ge=1, le=32)

@@ -119,8 +119,8 @@ async def test_unknown_destination_extraction_maps_profile_without_inventing_cit
     assert result.discovery_draft.experience.interests == {"архитектура"}
     assert result.discovery_draft.experience.road_tolerance.max_transfers == 1
     assert result.discovery_draft.allowed_modes == {TransportMode.RAIL}
-    assert result.discovery_draft.hotel_mode is None
-    assert result.missing_fields == ("hotel_mode",)
+    assert result.discovery_draft.hotel_mode is HotelMode.REQUIRED
+    assert result.missing_fields == ()
     call = client.responses.calls[0]
     assert call["store"] is False
     assert call["safety_identifier"] == "hashed-user"
@@ -165,7 +165,7 @@ async def test_semantically_invalid_intent_gets_one_repair_retry() -> None:
     result = await adapter.extract("Хочу куда-нибудь", context=context())
 
     assert len(client.responses.calls) == 2
-    assert result.missing_fields == ("origin", "hotel_mode", "budget")
+    assert result.missing_fields == ("origin", "budget")
     assert "Repair:" in client.responses.calls[1]["instructions"]
 
 
@@ -227,6 +227,30 @@ async def test_explicit_discovery_dates_override_reversed_model_dates() -> None:
     assert result.discovery_draft is not None
     assert result.discovery_draft.departure_date == date(2026, 8, 29)
     assert result.discovery_draft.return_date == date(2026, 8, 30)
+
+
+@pytest.mark.asyncio
+async def test_this_weekend_and_hotel_default_override_wrong_model_output() -> None:
+    client = FakeClient(
+        [
+            extraction(
+                departure_date=date(2026, 9, 5),
+                return_date=date(2026, 9, 6),
+                hotel_mode=ExtractedHotelMode.FORBIDDEN,
+            )
+        ]
+    )
+    adapter = OpenAIIntentExtractor(client)  # type: ignore[arg-type]
+
+    result = await adapter.extract(
+        "Из Москвы куда-нибудь в эти выходные, хочется истории",
+        context=ConversationContext(timezone="Europe/Moscow", current_date="2026-07-22"),
+    )
+
+    assert result.discovery_draft is not None
+    assert result.discovery_draft.departure_date == date(2026, 7, 25)
+    assert result.discovery_draft.return_date == date(2026, 7, 26)
+    assert result.discovery_draft.hotel_mode is HotelMode.REQUIRED
 
 
 @pytest.mark.asyncio

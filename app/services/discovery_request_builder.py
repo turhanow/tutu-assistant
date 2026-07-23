@@ -34,7 +34,7 @@ def missing_discovery_fields(draft: DiscoveryDraft) -> tuple[str, ...]:
         and draft.experience.pace is None
     ):
         missing.append("motives")
-    if draft.hotel_mode is None:
+    if draft.hotel_mode is None and not _is_overnight_trip(draft.departure_date, draft.return_date):
         missing.append("hotel_mode")
     return tuple(missing)
 
@@ -88,10 +88,15 @@ def build_discovery_request(
             "Выберите вариант без отеля или измените даты.",
             "hotel_mode",
         )
+    effective_return_date = (
+        draft.departure_date
+        if draft.hotel_mode is HotelMode.FORBIDDEN
+        else draft.return_date
+    )
     try:
         dates = DateRange(
             start=draft.departure_date,
-            end=draft.return_date,
+            end=effective_return_date,
             flexibility=draft.date_flexibility or DateFlexibility.FIXED,
         )
         return DiscoveryRequest(
@@ -104,7 +109,11 @@ def build_discovery_request(
             ),
             budget=draft.budget,
             currency=draft.currency,
-            hotel_mode=draft.hotel_mode,
+            hotel_mode=(
+                HotelMode.REQUIRED
+                if _is_overnight_trip(draft.departure_date, effective_return_date)
+                else draft.hotel_mode or HotelMode.OPTIONAL
+            ),
             experience=draft.experience,
             transport=TransportPreferences(
                 allowed_modes=draft.allowed_modes,
@@ -113,3 +122,7 @@ def build_discovery_request(
         )
     except ValueError as error:
         raise DiscoveryInputError(str(error), "dates") from error
+
+
+def _is_overnight_trip(departure_date: date | None, return_date: date | None) -> bool:
+    return departure_date is not None and return_date is not None and return_date > departure_date

@@ -118,7 +118,13 @@ class FileDestinationCatalog:
         }
         origin = request.origin.casefold()
         candidates = (
-            item.destination
+            item.destination.model_copy(
+                update={
+                    "activity_highlights": tuple(
+                        activity.name for activity in item.activities[:3]
+                    )
+                }
+            )
             for item in self._repository.all_content()
             if item.destination.name.casefold() != origin
             and requested_months.intersection(item.destination.season_months)

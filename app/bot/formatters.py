@@ -168,19 +168,24 @@ def _format_option(index: int, option: RankedTripOption) -> str:
     ]
     if combination.hotel is not None and combination.stay is not None:
         nights = _plural(combination.stay.nights, "ночь", "ночи", "ночей")
+        room = (
+            f" · номер: {escape(combination.hotel.room_name)}"
+            if combination.hotel.room_name
+            else ""
+        )
         lines.extend(
             (
-                f"🏨 Отель: {escape(combination.hotel.name)}",
+                f"🏨 Отель: {escape(combination.hotel.name)}{room}",
                 f"Проживание: {_format_date(combination.stay.check_in)} — "
                 f"{_format_date(combination.stay.check_out)}, {nights}",
             )
         )
     else:
         lines.append("🏨 Отель: не нужен")
-    lines.append(f"💳 Известная стоимость: {price_text}")
+    lines.append(f"💳 Предварительная стоимость: {price_text}")
     included = _known_price_components(combination)
     if included:
-        lines.append("В известную сумму входят: " + ", ".join(included))
+        lines.append("В предварительную сумму входят: " + ", ".join(included))
     if price.missing_components:
         missing = ", ".join(_component_name(item) for item in price.missing_components)
         lines.append(f"Пока не учтено из бронируемых компонентов: {escape(missing)}")
@@ -273,10 +278,18 @@ def _format_leg(label: str, offer) -> str:
         if offer.transfers == 0
         else _plural(offer.transfers, "пересадка", "пересадки", "пересадок")
     )
+    service = TRANSPORT_LABELS[offer.mode]
+    if offer.service_number:
+        service += f" № {escape(offer.service_number)}"
+    if offer.carrier:
+        service += f" · {escape(offer.carrier)}"
+    price = (
+        f" · {format_money(offer.price, offer.currency or '')}" if offer.price is not None else ""
+    )
     return (
-        f"{TRANSPORT_ICONS[offer.mode]} {label}: {TRANSPORT_LABELS[offer.mode]} · "
+        f"{TRANSPORT_ICONS[offer.mode]} {label}: {service} · "
         f"{_format_datetime(offer.departure_at)} → {_format_datetime(offer.arrival_at)} · "
-        f"{transfers}"
+        f"{transfers}{price}"
     )
 
 

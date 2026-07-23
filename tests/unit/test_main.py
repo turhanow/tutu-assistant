@@ -30,6 +30,7 @@ def test_application_wires_conversation_and_job_queue(monkeypatch) -> None:
         main_module,
         "build_llm_resources",
         lambda _: SimpleNamespace(
+            client=SimpleNamespace(),
             parser=SimpleNamespace(),
             intent_extractor=SimpleNamespace(),
             proposal_narrator=SimpleNamespace(),
@@ -86,6 +87,7 @@ async def test_post_init_publishes_brand_profile_and_commands(monkeypatch) -> No
         main_module,
         "build_llm_resources",
         lambda _: SimpleNamespace(
+            client=SimpleNamespace(),
             parser=SimpleNamespace(),
             intent_extractor=SimpleNamespace(),
             proposal_narrator=SimpleNamespace(),
@@ -125,6 +127,7 @@ async def test_post_init_does_not_block_static_commands_on_provider_cold_start(m
         main_module,
         "build_llm_resources",
         lambda _: SimpleNamespace(
+            client=SimpleNamespace(),
             parser=SimpleNamespace(),
             intent_extractor=SimpleNamespace(),
             proposal_narrator=SimpleNamespace(),
@@ -160,6 +163,7 @@ def test_analytics_feature_flag_selects_null_sink(monkeypatch) -> None:
         main_module,
         "build_llm_resources",
         lambda _: SimpleNamespace(
+            client=SimpleNamespace(),
             parser=SimpleNamespace(),
             intent_extractor=SimpleNamespace(),
             proposal_narrator=SimpleNamespace(),

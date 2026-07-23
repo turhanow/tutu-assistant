@@ -297,7 +297,7 @@ def test_complete_proposal_requires_two_anchor_activities() -> None:
         "trade_off": "Нет подтверждённой оценки локального транспорта",
         "content_complete": True,
     }
-    with pytest.raises(ValidationError, match="at least two"):
+    with pytest.raises(ValidationError, match="two or three activities per day"):
         WeekendProposal(**values)
 
     proposal = WeekendProposal(**{**values, "content_complete": False})

@@ -27,11 +27,11 @@ from app.domain.models import HotelMode, ParsedTripDraft, TransportMode
 from app.ports.discovery_llm import ConversationContext
 from app.prompts import intent_v1, narration_v2
 from app.services.explicit_constraints import (
-    explicit_hotel_mode,
     explicitly_forbids_night_travel,
     explicitly_mentions_river,
     explicitly_relaxed,
     extract_explicit_party,
+    resolved_hotel_mode,
 )
 from app.services.known_input_guardrails import extract_explicit_trip_dates
 from app.voice import FORBIDDEN_SLANG
@@ -282,12 +282,17 @@ def _map_intent(
     budget = _optional_money(value.max_total_budget)
     currency = (value.currency or "RUB").upper()
     allowed_modes = frozenset(TransportMode(item.value) for item in value.transport_preferences)
-    hotel_mode = explicit_hotel_mode(source_text) or (
-        HotelMode(value.hotel_mode.value) if value.hotel_mode else None
-    )
     party = extract_explicit_party(source_text)
     explicit_dates = (
         extract_explicit_trip_dates(source_text, today=today) if today is not None else (None, None)
+    )
+    departure_date = explicit_dates[0] or value.departure_date
+    return_date = explicit_dates[1] or value.return_date
+    hotel_mode = resolved_hotel_mode(
+        source_text,
+        HotelMode(value.hotel_mode.value) if value.hotel_mode else None,
+        departure_date=departure_date,
+        return_date=return_date,
     )
     normalized_experience = {
         item.strip().casefold().replace("ё", "е") for item in (*value.motives, *value.interests)
@@ -311,8 +316,8 @@ def _map_intent(
         known_draft = ParsedTripDraft(
             origin=value.origin,
             destination=value.destination,
-            departure_date=explicit_dates[0] or value.departure_date,
-            return_date=explicit_dates[1] or value.return_date,
+            departure_date=departure_date,
+            return_date=return_date,
             adults=party.adults if party.adults is not None else value.adults,
             children=party.children if party.children is not None else value.children,
             rooms=party.rooms if party.rooms is not None else value.rooms,
@@ -328,8 +333,8 @@ def _map_intent(
     else:
         discovery_draft = DiscoveryDraft(
             origin=value.origin,
-            departure_date=explicit_dates[0] or value.departure_date,
-            return_date=explicit_dates[1] or value.return_date,
+            departure_date=departure_date,
+            return_date=return_date,
             date_flexibility=(
                 DateFlexibility(value.date_flexibility.value) if value.date_flexibility else None
             ),

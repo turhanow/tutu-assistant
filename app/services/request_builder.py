@@ -36,7 +36,13 @@ class DraftInputError(ValueError):
 
 
 def next_missing_field(draft: ParsedTripDraft) -> str | None:
-    return next((field for field in REQUIRED_FIELDS if getattr(draft, field) is None), None)
+    for field in REQUIRED_FIELDS:
+        if getattr(draft, field) is not None:
+            continue
+        if field == "hotel_mode" and _is_overnight_trip(draft.departure_date, draft.return_date):
+            continue
+        return field
+    return None
 
 
 def apply_form_answer(
@@ -83,7 +89,7 @@ def apply_form_answer(
         return draft.model_copy(update={field: aliases[normalized]})
     if field == "adults":
         if value not in {"1", "2"}:
-            raise DraftInputError("В MVP поддерживается один или два взрослых.")
+            raise DraftInputError("Пока поддерживается один или два взрослых.")
         return draft.model_copy(update={field: int(value)})
     if field == "budget":
         if value.casefold() in {"нет", "не указан", "без бюджета"}:
@@ -165,6 +171,11 @@ def build_trip_request(
             "Выберите «отель не нужен» или перенесите дату возвращения.",
             "hotel_mode",
         )
+    effective_return_date = (
+        draft.departure_date
+        if draft.hotel_mode is HotelMode.FORBIDDEN
+        else draft.return_date
+    )
     if (draft.adults or 1) > 2 or draft.children > 0 or draft.rooms > 1:
         raise DraftInputError(
             "Сейчас поддерживаются только 1–2 взрослых, без детей и один номер. "
@@ -191,7 +202,7 @@ def build_trip_request(
         origin=draft.origin,
         destination=draft.destination,
         departure_date=draft.departure_date,
-        return_date=draft.return_date,
+        return_date=effective_return_date,
         travelers=TravelerComposition(
             adults=draft.adults or 1,
             children=draft.children,
@@ -206,7 +217,11 @@ def build_trip_request(
             return_window=draft.return_window,
         ),
         hotel=HotelPreferences(
-            mode=draft.hotel_mode,
+            mode=(
+                HotelMode.REQUIRED
+                if _is_overnight_trip(draft.departure_date, effective_return_date)
+                else draft.hotel_mode or HotelMode.OPTIONAL
+            ),
             stars_min=draft.hotel_stars_min,
             rating_min=draft.hotel_rating_min,
             meal_preferences=draft.hotel_meals,
@@ -216,6 +231,10 @@ def build_trip_request(
         event=event,
         sort=draft.sort or SortPreference.BALANCED,
     )
+
+
+def _is_overnight_trip(departure_date: date | None, return_date: date | None) -> bool:
+    return departure_date is not None and return_date is not None and return_date > departure_date
 
 
 def _parse_date(value: str, *, today: date | None = None) -> date:

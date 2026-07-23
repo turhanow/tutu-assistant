@@ -1,5 +1,6 @@
 import json
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from app.adapters.mcp_mappers import map_hotel_search, map_transport_search
@@ -100,6 +101,44 @@ def test_transport_constraints_are_revalidated_after_provider_search() -> None:
         [outbound.model_copy(update={"departure_at": outbound.departure_at.replace(hour=10)})],
         [return_offer],
     )
+
+
+def test_transport_pair_pool_preserves_cheap_fast_and_convenient_alternatives() -> None:
+    request, outbound, return_offer, _ = trip_inputs()
+    outbound_base = datetime.fromisoformat("2026-08-21T08:00:00+03:00")
+    return_base = datetime.fromisoformat("2026-08-23T16:00:00+03:00")
+    outbound_offers = [
+        outbound.model_copy(
+            update={
+                "provider_id": f"out-{index}",
+                "departure_at": outbound_base + timedelta(minutes=index),
+                "arrival_at": outbound_base + timedelta(minutes=index, hours=10 - index),
+                "duration": timedelta(hours=10 - index),
+                "price": Decimal(100 + index * 100),
+            }
+        )
+        for index in range(10)
+    ]
+    return_offers = [
+        return_offer.model_copy(
+            update={
+                "provider_id": f"back-{index}",
+                "departure_at": return_base + timedelta(minutes=index),
+                "arrival_at": return_base + timedelta(minutes=index, hours=10 - index),
+                "duration": timedelta(hours=10 - index),
+                "price": Decimal(100 + index * 100),
+            }
+        )
+        for index in range(10)
+    ]
+
+    pairs = build_transport_pairs(request, outbound_offers, return_offers)
+
+    assert len(pairs) == 24
+    assert len({pair[0].provider_id for pair in pairs}) > 1
+    assert len({pair[1].provider_id for pair in pairs}) > 1
+    assert (outbound_offers[0], return_offers[0]) in pairs
+    assert (outbound_offers[-1], return_offers[-1]) in pairs
 
 
 def test_hotel_offer_must_match_exact_pair_stay() -> None:

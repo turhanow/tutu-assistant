@@ -12,6 +12,7 @@ from app.domain.models import (
     OfferDetails,
     RankedTripOption,
     SortPreference,
+    TransportMode,
     TripCombination,
     TripComponent,
     TripRequest,
@@ -146,6 +147,38 @@ async def test_checkout_builder_is_used_only_when_offer_has_no_direct_url() -> N
 
     assert len(gateway.calls) == 3
     assert all(not service.is_offer_specific(item) for item in items)
+
+
+@pytest.mark.asyncio
+async def test_etrain_link_is_truthfully_classified_as_schedule_not_exact_ticket() -> None:
+    result = search_result()
+    option = result.options[0]
+    combination = option.combination
+    result = result.model_copy(
+        update={
+            "options": (
+                option.model_copy(
+                    update={
+                        "combination": combination.model_copy(
+                            update={
+                                "outbound": combination.outbound.model_copy(
+                                    update={"mode": TransportMode.ETRAIN}
+                                )
+                            }
+                        )
+                    }
+                ),
+            )
+        }
+    )
+    service = TripHandoffService(FakeGateway())  # type: ignore[arg-type]
+
+    items = await service.create_checkout_items(result, 0)
+
+    outbound = items[0]
+    assert outbound.link.kind == "schedule_url"
+    assert not service.is_offer_specific(outbound)
+    assert service.button_prefix(outbound) == "Открыть расписание"
 
 
 @pytest.mark.asyncio

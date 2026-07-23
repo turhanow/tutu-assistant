@@ -14,6 +14,8 @@ _ARGUMENT_PATTERN = re.compile(r"^[a-z0-9_-]{1,16}$")
 
 class DiscoveryAction(StrEnum):
     DETAILS = "dt"
+    PLAN = "pl"
+    COMPARE = "cp"
     REFINE = "rf"
     RECHECK = "rc"
     REJECT = "rj"

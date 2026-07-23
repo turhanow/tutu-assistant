@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -55,6 +56,7 @@ _PENDING_FIELD = "trip_pending_field"
 _REQUEST = "trip_request"
 _RESULT = "trip_result"
 _DETAILS_CACHE = "trip_details_cache"
+_CHECKOUT_ITEMS = "trip_checkout_items"
 _SEARCH_ID = "trip_search_id"
 _RATE_EVENTS = "trip_rate_events"
 _ANALYTICS_FLOW_ID = "flow_id"
@@ -438,7 +440,10 @@ class TripConversation:
                 status = await query.message.reply_text(
                     self._voice.progress("handoff", context.user_data)
                 )
-                items = await self._handoff.create_checkout_items(result, index)
+                cached = context.user_data.get(_CHECKOUT_ITEMS)
+                items = cached.get(index) if isinstance(cached, dict) else None
+                if not items:
+                    items = await self._handoff.create_checkout_items(result, index)
                 buttons = [
                     [
                         InlineKeyboardButton(
@@ -449,27 +454,11 @@ class TripConversation:
                     ]
                     for item in items
                 ]
-                has_schedule_link = any(item.link.kind == "schedule_url" for item in items)
-                has_broad_link = any(
-                    not TripHandoffService.is_offer_specific(item)
-                    and item.link.kind != "schedule_url"
-                    for item in items
-                )
-                link_scope = ""
-                if has_schedule_link:
-                    link_scope += (
-                        " Для электричек Tutu открывает расписание на выбранную дату, "
-                        "поэтому сверьте время из рекомендации."
-                    )
-                if has_broad_link:
-                    link_scope += " Для ссылок без deeplink откроется список вариантов."
-                if not has_schedule_link and not has_broad_link:
-                    link_scope = " Кнопки ведут к выбранным билетам и отелю."
                 await status.edit_text(
                     "Вы перейдёте на Tutu для проверки актуальной цены и оформления. "
                     "Транспорт и отель могут оформляться отдельно; переход по ссылке "
-                    "не резервирует места, а стоимость и доступность могут измениться."
-                    + link_scope,
+                    "не резервирует места, а стоимость и доступность могут измениться. "
+                    "Кнопки ведут к выбранным билетам и отелю.",
                     reply_markup=InlineKeyboardMarkup(buttons),
                 )
                 await self._track(
@@ -540,6 +529,8 @@ class TripConversation:
         context.user_data[_RESULT] = result
         context.user_data[_DETAILS_CACHE] = {}
         context.user_data[_SEARCH_ID] = search_id
+        checkout_items = await self._resolve_inline_checkout_items(result)
+        context.user_data[_CHECKOUT_ITEMS] = checkout_items
         await self._track(
             "verification_completed",
             context,
@@ -569,11 +560,40 @@ class TripConversation:
             },
         )
         await progress.edit_text(
-            format_results(result),
+            format_results(result, checkout_items),
             parse_mode=ParseMode.HTML,
             reply_markup=self._results_keyboard(result, search_id),
         )
         return State.RESULTS
+
+    async def _resolve_inline_checkout_items(
+        self,
+        result: TripSearchResult,
+    ) -> dict[int, tuple]:
+        if self._handoff is None or not result.options:
+            return {}
+
+        async def resolve(index: int):
+            try:
+                items = await self._handoff.create_checkout_items(result, index)
+            except (TutuAssistantError, TimeoutError, ValueError, IndexError):
+                logger.warning(
+                    "known_inline_checkout_link_unavailable",
+                    extra={"option_index": index},
+                    exc_info=True,
+                )
+                return None
+            return index, tuple(items)
+
+        try:
+            async with asyncio.timeout(16):
+                resolved = await asyncio.gather(
+                    *(resolve(index) for index in range(len(result.options)))
+                )
+        except TimeoutError:
+            logger.warning("known_inline_checkout_links_timeout")
+            return {}
+        return {index: items for item in resolved if item is not None for index, items in (item,)}
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info("product_event", extra={"event": "conversation_cancelled"})

@@ -9,7 +9,14 @@ import secrets
 import warnings
 from enum import IntEnum
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     CallbackQueryHandler,
@@ -34,16 +41,20 @@ from app.domain.errors import LlmParseError, LlmProviderError
 from app.ports.clock import Clock
 from app.ports.discovery_llm import ConversationContext, IntentExtractor
 from app.services.input_safety import SENSITIVE_DATA_RESPONSE, contains_sensitive_data
+from app.services.known_input_guardrails import normalize_city_answer
 from app.services.product_analytics import ProductAnalytics
 from app.voice import Voice
 
 _FLOW_ID = "flow_id"
 _INTENT_TRACKED = "intent_analytics_tracked"
+_ONBOARDING_ORIGIN = "onboarding_origin"
 logger = logging.getLogger(__name__)
 
 
 class RouterState(IntEnum):
-    INTAKE = 10
+    LOCATION = 10
+    CHOICE = 11
+    INTAKE = 12
 
 
 class BotRouter:
@@ -85,9 +96,48 @@ class BotRouter:
         await update.effective_message.reply_text(
             self._voice.router_start,
             parse_mode=ParseMode.HTML,
+            reply_markup=self._location_keyboard(),
+        )
+        return RouterState.LOCATION
+
+    async def location_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        message = update.effective_message
+        location = getattr(message, "location", None)
+        location_received = location is not None
+        if location is not None:
+            if not _is_near_moscow(location.latitude, location.longitude):
+                await message.reply_text(
+                    "📍 Геопозиция получена, но я не могу надёжно определить по этой точке "
+                    "поддерживаемый город. Напишите город отправления текстом — точные "
+                    "координаты не сохраняю."
+                )
+                return RouterState.LOCATION
+            origin = "Москва"
+        else:
+            text = (message.text or "").strip()
+            if text.casefold() == "указать город текстом":
+                await message.reply_text("Напишите город отправления, например: Москва.")
+                return RouterState.LOCATION
+            try:
+                origin = normalize_city_answer(text)
+            except ValueError as error:
+                await message.reply_text(str(error))
+                return RouterState.LOCATION
+        context.user_data[_ONBOARDING_ORIGIN] = origin
+        confirmation = (
+            f"✅ Геопозиция получена. Выбран город отправления: {origin}."
+            if location_received
+            else f"Выбран город отправления: {origin}."
+        )
+        await message.reply_text(
+            confirmation,
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await message.reply_text(
+            "Можно сначала вдохновиться идеями или сразу перейти к поиску поездки.",
             reply_markup=self._route_keyboard(),
         )
-        return RouterState.INTAKE
+        return RouterState.CHOICE
 
     async def intake(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
@@ -96,8 +146,12 @@ class BotRouter:
             return RouterState.INTAKE
         progress = await message.reply_text(self._voice.progress("route", context.user_data))
         try:
+            source_text = message.text or ""
+            origin = context.user_data.get(_ONBOARDING_ORIGIN)
+            if isinstance(origin, str) and origin.casefold() not in source_text.casefold():
+                source_text = f"Из {origin}. {source_text}"
             parsed = await self._extractor.extract(
-                message.text or "",
+                source_text,
                 context=ConversationContext(
                     timezone=self._timezone,
                     current_date=self._clock.now().date().isoformat(),
@@ -142,9 +196,16 @@ class BotRouter:
         query = update.callback_query
         await query.answer()
         if query.data == "route:known":
-            context.user_data.clear()
-            await query.message.reply_text("Напишите маршрут, даты и ограничения одним сообщением.")
-            return State.INTAKE
+            origin = context.user_data.get(_ONBOARDING_ORIGIN)
+            prefix = f"Город отправления: {origin}. " if isinstance(origin, str) else ""
+            await query.message.reply_text(
+                prefix + "Напишите направление, даты и ограничения одним сообщением. Например: "
+                "«Казань, 15–17 августа, двое взрослых, нужен отель, до 30 000 ₽»."
+            )
+            return RouterState.INTAKE
+        origin = context.user_data.get(_ONBOARDING_ORIGIN)
+        if isinstance(origin, str):
+            return await self._discovery.start_from_origin(update, context, origin)
         return await self._discovery.start(update, context)
 
     async def orphan_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -163,9 +224,24 @@ class BotRouter:
     def _route_keyboard() -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("Проверить готовый маршрут", callback_data="route:known")],
-                [InlineKeyboardButton("Подобрать идею", callback_data="route:ideas")],
+                [InlineKeyboardButton("✨ Вдохновиться", callback_data="route:ideas")],
+                [InlineKeyboardButton("🔎 Найти поездку", callback_data="route:known")],
             ]
+        )
+
+    @staticmethod
+    def _location_keyboard() -> ReplyKeyboardMarkup:
+        return ReplyKeyboardMarkup(
+            [
+                [KeyboardButton("📍 Поделиться геопозицией", request_location=True)],
+                [KeyboardButton("Москва")],
+                [KeyboardButton("Указать город текстом")],
+            ],
+            resize_keyboard=True,
+            # Some Telegram clients silently deny geolocation and send no update to the
+            # bot. Keep the keyboard visible so the user can immediately choose a
+            # text-based fallback instead of getting stuck in onboarding.
+            one_time_keyboard=False,
         )
 
     def _safety_identifier(self, update: Update) -> str | None:
@@ -214,9 +290,17 @@ def build_routed_conversation_handler(
                 CommandHandler("start", router.start),
                 CommandHandler("newtrip", known.start),
                 CommandHandler("ideas", discovery.start),
+                CommandHandler("reset", router.start),
                 *common_commands,
             ],
             states={
+                RouterState.LOCATION: [
+                    MessageHandler(filters.LOCATION | text, router.location_input),
+                ],
+                RouterState.CHOICE: [
+                    CallbackQueryHandler(router.route_choice, pattern=r"^route:(known|ideas)$"),
+                    MessageHandler(text, router.intake),
+                ],
                 RouterState.INTAKE: [
                     MessageHandler(text, router.intake),
                     CallbackQueryHandler(router.route_choice, pattern=r"^route:(known|ideas)$"),
@@ -262,6 +346,7 @@ def build_routed_conversation_handler(
             },
             fallbacks=[
                 CommandHandler("cancel", known.cancel),
+                CommandHandler("reset", router.start),
                 CommandHandler("start", router.start),
                 CommandHandler("newtrip", known.start),
                 CommandHandler("ideas", discovery.start),
@@ -277,3 +362,8 @@ def build_routed_conversation_handler(
             conversation_timeout=30 * 60,
             name="short_trip",
         )
+
+
+def _is_near_moscow(latitude: float, longitude: float) -> bool:
+    """Resolve only the supported pilot origin without retaining precise coordinates."""
+    return 54.8 <= latitude <= 56.1 and 36.8 <= longitude <= 38.2

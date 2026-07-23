@@ -14,6 +14,7 @@ from app.domain.models import HotelMode, TransportPreferences, TravelerCompositi
 
 CRITICAL_FIELDS = ("origin", "dates", "motives")
 OPTIONAL_CLARIFICATION_FIELDS = ("budget", "road_tolerance", "travelers")
+MAX_DISCOVERY_WINDOW_DAYS = 14
 
 
 class DiscoveryInputError(ValueError):
@@ -26,7 +27,11 @@ def missing_discovery_fields(draft: DiscoveryDraft) -> tuple[str, ...]:
     missing: list[str] = []
     if draft.origin is None:
         missing.append("origin")
-    if draft.departure_date is None or draft.return_date is None:
+    if (
+        draft.departure_date is None
+        or draft.return_date is None
+        or _has_oversized_date_window(draft.departure_date, draft.return_date)
+    ):
         missing.append("dates")
     if (
         not draft.experience.motives
@@ -60,6 +65,12 @@ def build_discovery_request(
     *,
     today: date,
 ) -> DiscoveryRequest:
+    if _has_oversized_date_window(draft.departure_date, draft.return_date):
+        raise DiscoveryInputError(
+            "Указан слишком широкий период для одной короткой поездки. "
+            "Выберите конкретные даты длительностью не более 15 дней.",
+            "dates",
+        )
     missing = missing_discovery_fields(draft)
     if missing:
         raise DiscoveryInputError(
@@ -89,9 +100,7 @@ def build_discovery_request(
             "hotel_mode",
         )
     effective_return_date = (
-        draft.departure_date
-        if draft.hotel_mode is HotelMode.FORBIDDEN
-        else draft.return_date
+        draft.departure_date if draft.hotel_mode is HotelMode.FORBIDDEN else draft.return_date
     )
     try:
         dates = DateRange(
@@ -121,8 +130,23 @@ def build_discovery_request(
             ),
         )
     except ValueError as error:
-        raise DiscoveryInputError(str(error), "dates") from error
+        raise DiscoveryInputError(
+            "Не удалось проверить даты поездки. Укажите конкретные даты ещё раз.",
+            "dates",
+        ) from error
 
 
 def _is_overnight_trip(departure_date: date | None, return_date: date | None) -> bool:
     return departure_date is not None and return_date is not None and return_date > departure_date
+
+
+def _has_oversized_date_window(
+    departure_date: date | None,
+    return_date: date | None,
+) -> bool:
+    return (
+        departure_date is not None
+        and return_date is not None
+        and return_date >= departure_date
+        and (return_date - departure_date).days > MAX_DISCOVERY_WINDOW_DAYS
+    )

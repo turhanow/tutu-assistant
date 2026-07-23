@@ -224,6 +224,20 @@ def test_itinerary_uses_real_city_window_and_splits_anchors_across_days() -> Non
     assert result.content_complete
 
 
+def test_plan_is_built_from_fallback_activities_when_no_verified_content() -> None:
+    empty_content = DestinationContent(
+        destination=destination(),
+        activities=(),
+        evidence=(evidence("kolomna"),),
+        catalog_version="v1",
+    )
+    result = ItineraryBuilder().build(empty_content, option(), verified_at=NOW)
+
+    assert result.content_complete
+    assert len(result.days) == 2
+    assert all(2 <= len(day.activities) + len(day.suggestions) <= 3 for day in result.days)
+
+
 def test_itinerary_excludes_expired_dynamic_content_and_unknown_timezone() -> None:
     invalid_content = DestinationContent(
         destination=destination(),
@@ -232,9 +246,14 @@ def test_itinerary_excludes_expired_dynamic_content_and_unknown_timezone() -> No
         catalog_version="v1",
     )
     expired = ItineraryBuilder().build(invalid_content, option(), verified_at=NOW)
-    assert not expired.content_complete
-    assert expired.unscheduled_activity_ids == ("activity_kolomna_1",)
-    assert "просроченными" in expired.warnings[-1]
+    assert expired.content_complete
+    assert "activity_kolomna_1" in expired.unscheduled_activity_ids
+    assert all(
+        item.startswith("synthetic-kolomna")
+        for item in expired.unscheduled_activity_ids
+        if "activity_kolomna" not in item
+    )
+    assert any("просроченными" in item for item in expired.warnings)
 
     unknown_timezone = ItineraryBuilder().build(
         content(),
@@ -243,7 +262,7 @@ def test_itinerary_excludes_expired_dynamic_content_and_unknown_timezone() -> No
     )
     assert unknown_timezone.content_complete
     assert [len(day.suggestions) for day in unknown_timezone.days] == [2, 2]
-    assert "Часовой пояс" in unknown_timezone.warnings[0]
+    assert any("Часы работы" in item for item in unknown_timezone.warnings)
 
 
 def test_budget_keeps_confirmed_and_estimated_ranges_separate() -> None:

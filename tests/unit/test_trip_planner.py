@@ -225,6 +225,8 @@ async def test_transport_stage_is_reused_without_duplicate_provider_calls() -> N
     completed = await planner.complete_transport_candidates(candidates, search_hotels=True)
 
     assert transport_only.options
+    assert all(option.combination.hotel is None for option in transport_only.options)
+    assert not transport_only.failures
     assert completed.options
     assert len([item for item in gateway.calls if item[0] == "search_transport"]) == 2
     assert len([item for item in gateway.calls if item[0] == "search_hotels"]) == 1
@@ -269,3 +271,18 @@ async def test_soft_time_windows_are_relaxed_only_to_fill_comparison_options() -
         if "Время отправления выходит" in " ".join(item.combination.warnings)
     ]
     assert len(relaxed) == 2
+
+
+def test_only_transport_with_offer_specific_checkout_remains_bookable() -> None:
+    _, base, _, _, _ = inputs()
+    offers = [
+        base.model_copy(update={"mode": TransportMode.RAIL, "transfers": 0}),
+        base.model_copy(update={"mode": TransportMode.BUS, "transfers": 0}),
+        base.model_copy(update={"mode": TransportMode.ETRAIN, "transfers": 0}),
+        base.model_copy(update={"mode": TransportMode.AVIA, "transfers": 1}),
+        base.model_copy(update={"mode": TransportMode.UNKNOWN, "transfers": None}),
+    ]
+
+    filtered = TripPlanner._offers_with_exact_checkout(offers)
+
+    assert [offer.mode for offer in filtered] == [TransportMode.RAIL, TransportMode.BUS]

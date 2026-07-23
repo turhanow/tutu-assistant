@@ -20,21 +20,49 @@ _CITY_ALIASES = {
     "ярославля": "Ярославль",
 }
 _MONTHS = {
+    "январь": 1,
     "января": 1,
+    "янв": 1,
+    "февраль": 2,
     "февраля": 2,
+    "фев": 2,
+    "март": 3,
     "марта": 3,
+    "мар": 3,
+    "апрель": 4,
     "апреля": 4,
+    "апр": 4,
+    "май": 5,
     "мая": 5,
+    "июнь": 6,
     "июня": 6,
+    "июн": 6,
+    "июль": 7,
     "июля": 7,
+    "июл": 7,
+    "август": 8,
     "августа": 8,
+    "авг": 8,
+    "сентябрь": 9,
     "сентября": 9,
+    "сен": 9,
+    "сент": 9,
+    "октябрь": 10,
     "октября": 10,
+    "окт": 10,
+    "ноябрь": 11,
     "ноября": 11,
+    "ноя": 11,
+    "декабрь": 12,
     "декабря": 12,
+    "дек": 12,
 }
-_DATE = r"(?P<day>\d{1,2})\s+(?P<month>" + "|".join(_MONTHS) + r")(?:\s+(?P<year>20\d{2}))?"
-_MONTH_PATTERN = "|".join(_MONTHS)
+_MONTH_PATTERN = "|".join(sorted(_MONTHS, key=len, reverse=True))
+_DATE = (
+    r"(?P<day>\d{1,2})\s+(?P<month>"
+    + _MONTH_PATTERN
+    + r")\.?(?:\s+(?P<year>20\d{2}))?"
+)
 
 
 def normalize_city_answer(value: str) -> str:
@@ -138,12 +166,17 @@ def _requests_nearest_weekend(text: str) -> bool:
 
 
 def extract_explicit_date_range(text: str, *, today: date) -> tuple[date, date] | None:
-    """Extract an explicit Russian date range without asking an LLM to reorder it."""
+    """Extract a concrete Russian date-range answer without an LLM round trip."""
 
     normalized = " ".join(text.casefold().replace("ё", "е").split())
+    if re.search(r"\bзавтра\s*(?:и|—|–|-)\s*послезавтра\b", normalized):
+        return today + timedelta(days=1), today + timedelta(days=2)
+    if _requests_nearest_weekend(normalized):
+        return nearest_weekend(today)
+
     same_month = re.search(
         rf"(?<!\d)(?P<first>\d{{1,2}})\s*[—–-]\s*(?P<second>\d{{1,2}})\s+"
-        rf"(?P<month>{_MONTH_PATTERN})(?:\s+(?P<year>20\d{{2}}))?",
+        rf"(?P<month>{_MONTH_PATTERN})\.?(?:\s+(?P<year>20\d{{2}}))?",
         normalized,
     )
     if same_month is not None:
@@ -177,9 +210,9 @@ def extract_explicit_date_range(text: str, *, today: date) -> tuple[date, date] 
 
     full_range = re.search(
         rf"(?<!\d)(?P<first>\d{{1,2}})\s+(?P<first_month>{_MONTH_PATTERN})"
-        rf"(?:\s+(?P<first_year>20\d{{2}}))?\s*[—–-]\s*"
+        rf"\.?(?:\s+(?P<first_year>20\d{{2}}))?\s*[—–-]\s*"
         rf"(?P<second>\d{{1,2}})\s+(?P<second_month>{_MONTH_PATTERN})"
-        rf"(?:\s+(?P<second_year>20\d{{2}}))?",
+        rf"\.?(?:\s+(?P<second_year>20\d{{2}}))?",
         normalized,
     )
     if full_range is None:

@@ -54,8 +54,10 @@ class TripHandoffService:
                 *(self._checkout_item(result, index, component) for component in components)
             )
         items = [item for item in resolved if item is not None]
-        if not items:
-            raise CheckoutError("no safe Tutu handoff links are available")
+        resolved_components = {item.component for item in items}
+        required_components = set(components)
+        if not required_components.issubset(resolved_components):
+            raise CheckoutError("exact checkout links are unavailable for this trip option")
         return tuple(items)
 
     async def _checkout_item(
@@ -65,26 +67,23 @@ class TripHandoffService:
         component: TripComponent,
     ) -> TripCheckoutItem | None:
         offer = self._offer(result, index, component)
+        # Tutu currently exposes only a date-level schedule URL for commuter trains.
+        # It must never be presented as checkout for the exact departure shown in a card.
+        if isinstance(offer, TransportOffer) and offer.mode is TransportMode.ETRAIN:
+            return None
         if offer.provider_url is not None:
             # Search responses already carry the most specific URL for this exact offer.
             # Prefer it over rebuilding a URL that may degrade to a day-level listing.
-            kind = (
-                "schedule_url"
-                if isinstance(offer, TransportOffer) and offer.mode is TransportMode.ETRAIN
-                else "hotel_page"
-                if isinstance(offer, HotelOffer)
-                else "direct_offer"
-            )
+            kind = "hotel_page" if isinstance(offer, HotelOffer) else "direct_offer"
             link = CheckoutLink(url=offer.provider_url, kind=kind)
         else:
             try:
                 link = await self._gateway.create_checkout_link(offer.offer_ref)
             except ProviderError:
                 return None
-            if isinstance(offer, TransportOffer) and offer.mode is TransportMode.ETRAIN:
-                link = link.model_copy(update={"kind": "schedule_url"})
         self._require_tutu_host(link)
-        return TripCheckoutItem(component=component, link=link)
+        item = TripCheckoutItem(component=component, link=link)
+        return item if self.is_offer_specific(item) else None
 
     @staticmethod
     def _combination(result: TripSearchResult, index: int):

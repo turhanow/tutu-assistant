@@ -52,6 +52,7 @@ BOT_COMMANDS = (
     BotCommand("feedback", "Сообщить о проблеме"),
     BotCommand("deletefeedback", "Удалить сохранённое обращение"),
     BotCommand("cancel", "Отменить диалог и удалить параметры"),
+    BotCommand("reset", "Сбросить контекст и начать сначала"),
 )
 
 

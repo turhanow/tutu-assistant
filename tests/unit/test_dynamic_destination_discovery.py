@@ -113,14 +113,16 @@ async def test_dynamic_catalog_uses_structured_output_and_caches_ai_content() ->
         "Музей 0",
         "Набережная 0",
     )
+    assert profiles[0].short_description == ("Поездка ради Исторический центр 0 и Музей 0.")
+    assert "Набережная 0" in (profiles[0].full_description or "")
+    assert profiles[0].taxi_available is True
     assert content.is_ai_generated is True
     assert content.evidence == ()
     assert content.activities[0].address == "Советская улица, 1"
-    assert str(content.activities[0].map_url).startswith(
-        "https://yandex.ru/maps/?text="
-    )
+    assert str(content.activities[0].map_url).startswith("https://yandex.ru/maps/?text=")
     assert "%D0%93%D0%BE%D1%80%D0%BE%D0%B4%200" in str(content.activities[0].map_url)
     assert content.activities[1].map_url is not None
+    assert content.activities[0].description == ("Знакомство с историей; ориентировочно 2 ч.")
 
 
 def test_yandex_query_does_not_repeat_city_already_present_in_address() -> None:
@@ -213,7 +215,7 @@ async def test_hybrid_catalog_supplements_dynamic_results_and_falls_back_on_fail
 
 
 @pytest.mark.asyncio
-async def test_hybrid_catalog_keeps_complete_dynamic_pool_primary() -> None:
+async def test_hybrid_catalog_keeps_dynamic_pool_primary_and_supplements_capacity() -> None:
     dynamic_profiles = tuple(
         profile(f"dynamic_{index}", f"Динамический {index}") for index in range(6)
     )
@@ -224,7 +226,8 @@ async def test_hybrid_catalog_keeps_complete_dynamic_pool_primary() -> None:
 
     result = await hybrid.find_candidates(request(), limit=12)
 
-    assert result == dynamic_profiles
+    assert result[:6] == dynamic_profiles
+    assert result[6].name == "Статический"
 
 
 class FakeContentGateway:

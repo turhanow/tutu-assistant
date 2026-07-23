@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -75,8 +76,16 @@ def test_bot_command_catalog_matches_supported_handlers() -> None:
         "feedback",
         "deletefeedback",
         "cancel",
+        "reset",
     }
     assert all(description for description in commands.values())
+
+
+def test_production_bot_avatar_asset_is_present_and_nonempty() -> None:
+    avatar = Path("assets/telegram-bot-avatar.png")
+
+    assert avatar.is_file()
+    assert avatar.stat().st_size > 10_000
 
 
 @pytest.mark.asyncio

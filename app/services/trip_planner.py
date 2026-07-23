@@ -9,7 +9,6 @@ from app.domain.errors import ProviderError
 from app.domain.models import (
     HotelMode,
     HotelOffer,
-    HotelPreferences,
     HotelSearchQuery,
     TransportMode,
     TransportOffer,
@@ -22,7 +21,14 @@ from app.domain.models import (
 )
 from app.ports.clock import Clock
 from app.ports.tutu import TutuGateway
-from app.services.combinations import build_combinations, required_hotel_stays
+from app.services.combinations import (
+    MAX_COMBINATIONS,
+    MAX_COMBINATIONS_RELAXED,
+    MAX_TRANSPORT_OFFERS_PER_LEG,
+    MAX_TRANSPORT_PAIRS,
+    build_combinations,
+    required_hotel_stays,
+)
 from app.services.date_rules import validate_planning_date
 from app.services.ranking import rank_options
 
@@ -170,81 +176,98 @@ class TripPlanner:
         outbound = list(candidates.outbound)
         return_offers = list(candidates.return_offers)
         failures = list(candidates.failures)
-        stays = required_hotel_stays(request, outbound, return_offers)
         hotels_by_stay: dict[tuple[date, date], list[HotelOffer]] = {}
         effective_request = request
-        if not search_hotels:
-            effective_request = request.model_copy(
-                update={"hotel": HotelPreferences(mode=HotelMode.FORBIDDEN)}
-            )
-        elif request.hotel.mode is not HotelMode.FORBIDDEN:
-            hotel_results = await asyncio.gather(
-                *(self._search_hotels(request, stay) for stay in stays[:3]),
-                return_exceptions=True,
-            )
-            for stay, hotel_result in zip(stays[:3], hotel_results, strict=True):
-                if isinstance(hotel_result, ProviderError):
-                    failures.append(
-                        self._failure(
-                            "hotel_provider_error",
-                            "hotel",
-                            True,
-                            "Tutu временно не ответил по размещению",
-                        )
-                    )
-                    continue
-                if isinstance(hotel_result, BaseException):
-                    raise hotel_result
-                hotels_by_stay[(stay.check_in, stay.check_out)] = list(hotel_result)
+        requires_hotel = request.hotel.mode is HotelMode.REQUIRED
+        combination_requests = tuple(self._combination_request_stages(effective_request))
+        combination_limits = self._combination_limit_stages()
+        combinations: list = []
+        known_signatures = set()
 
-        combinations = build_combinations(
-            effective_request,
-            outbound,
-            return_offers,
-            hotel_offers_by_stay=hotels_by_stay,
-        )
-        if len(combinations) < 3 and (
-            effective_request.transport.departure_window is not None
-            or effective_request.transport.return_window is not None
-        ):
-            relaxed_request = effective_request.model_copy(
-                update={
-                    "transport": TransportPreferences(
-                        allowed_modes=effective_request.transport.allowed_modes,
-                        max_transfers=effective_request.transport.max_transfers,
+        for stage_request, stage_warning in combination_requests:
+            for (
+                max_offers_per_leg,
+                max_transport_pairs,
+                max_combinations,
+            ) in combination_limits:
+                if combinations and len(combinations) >= 3:
+                    break
+
+                if search_hotels and stage_request.hotel.mode is not HotelMode.FORBIDDEN:
+                    stays = required_hotel_stays(
+                        stage_request,
+                        outbound,
+                        return_offers,
+                        max_transport_offers_per_leg=max_offers_per_leg,
+                        max_transport_pairs=max_transport_pairs,
                     )
-                }
-            )
-            relaxed = build_combinations(
-                relaxed_request,
-                outbound,
-                return_offers,
-                hotel_offers_by_stay=hotels_by_stay,
-            )
-            known_signatures = {item.signature for item in combinations}
-            for item in relaxed:
-                if item.signature in known_signatures:
-                    continue
-                combinations.append(
-                    item.model_copy(
-                        update={
-                            "warnings": (
-                                *item.warnings,
-                                "Время отправления выходит за предпочтительное окно.",
+                    hotel_results = await asyncio.gather(
+                        *(
+                            self._search_hotels(stage_request, stay)
+                            for stay in stays[:3]
+                            if (stay.check_in, stay.check_out) not in hotels_by_stay
+                        ),
+                        return_exceptions=True,
+                    )
+                    for stay, hotel_result in zip(
+                        [
+                            stay
+                            for stay in stays[:3]
+                            if (stay.check_in, stay.check_out) not in hotels_by_stay
+                        ],
+                        hotel_results,
+                        strict=True,
+                    ):
+                        if isinstance(hotel_result, ProviderError):
+                            failures.append(
+                                self._failure(
+                                    "hotel_provider_error",
+                                    "hotel",
+                                    True,
+                                    "Tutu временно не ответил по размещению",
+                                )
                             )
-                        }
-                    )
+                            continue
+                        if isinstance(hotel_result, BaseException):
+                            raise hotel_result
+                        hotels_by_stay[(stay.check_in, stay.check_out)] = list(hotel_result)
+
+                built = build_combinations(
+                    stage_request,
+                    outbound,
+                    return_offers,
+                    hotel_offers_by_stay=hotels_by_stay,
+                    allow_transport_only=not search_hotels,
+                    max_transport_offers_per_leg=max_offers_per_leg,
+                    max_transport_pairs=max_transport_pairs,
+                    max_combinations=max_combinations,
                 )
-                known_signatures.add(item.signature)
+                for option in built:
+                    if option.signature in known_signatures:
+                        continue
+                    known_signatures.add(option.signature)
+                    if stage_warning:
+                        option = option.model_copy(
+                            update={"warnings": (*option.warnings, stage_warning)}
+                        )
+                    combinations.append(option)
+                    if len(combinations) >= 3:
+                        break
                 if len(combinations) >= 3:
                     break
+            if len(combinations) >= 3:
+                break
         over_budget = False
         if not combinations and request.budget is not None:
+            without_budget_request = effective_request.model_copy(update={"budget": None})
             without_budget = build_combinations(
-                effective_request.model_copy(update={"budget": None}),
+                without_budget_request,
                 outbound,
                 return_offers,
                 hotel_offers_by_stay=hotels_by_stay,
+                max_transport_offers_per_leg=MAX_TRANSPORT_OFFERS_PER_LEG + 20,
+                max_transport_pairs=MAX_TRANSPORT_PAIRS * 4,
+                max_combinations=MAX_COMBINATIONS_RELAXED,
             )
             exact_totals = [
                 item.price.known_total
@@ -263,35 +286,32 @@ class TripPlanner:
                         f"на {difference.quantize(1)} {request.currency}",
                     )
                 )
-        if (
-            search_hotels
-            and request.hotel.mode is HotelMode.REQUIRED
-            and not combinations
-            and not over_budget
-            and not stays
-        ):
-            failures.append(
-                self._failure(
-                    "no_feasible_pair",
-                    "transport",
-                    False,
-                    "Предложения туда и обратно несовместимы по времени поездки",
-                )
+        if search_hotels and requires_hotel and not combinations and not over_budget:
+            required_stays = required_hotel_stays(
+                request,
+                outbound,
+                return_offers,
+                max_transport_offers_per_leg=MAX_TRANSPORT_OFFERS_PER_LEG + 20,
+                max_transport_pairs=MAX_TRANSPORT_PAIRS * 4,
             )
-        elif (
-            search_hotels
-            and request.hotel.mode is HotelMode.REQUIRED
-            and not combinations
-            and not over_budget
-        ):
-            failures.append(
-                self._failure(
-                    "no_hotel",
-                    "hotel",
-                    False,
-                    "Размещение на все ночи не найдено",
+            if required_stays:
+                failures.append(
+                    self._failure(
+                        "no_hotel",
+                        "hotel",
+                        False,
+                        "Размещение на все ночи не найдено",
+                    )
                 )
-            )
+            else:
+                failures.append(
+                    self._failure(
+                        "no_feasible_pair",
+                        "transport",
+                        False,
+                        "Предложения туда и обратно несовместимы по времени поездки",
+                    )
+                )
         return TripSearchResult(
             request=request,
             options=tuple(rank_options(combinations, preferred=request.sort)),
@@ -299,8 +319,88 @@ class TripPlanner:
             searched_at=candidates.searched_at,
         )
 
+    @staticmethod
+    def _combination_limit_stages() -> tuple[tuple[int, int, int], ...]:
+        return (
+            (MAX_TRANSPORT_OFFERS_PER_LEG, MAX_TRANSPORT_PAIRS, MAX_COMBINATIONS),
+            (MAX_TRANSPORT_OFFERS_PER_LEG, MAX_TRANSPORT_PAIRS, MAX_COMBINATIONS_RELAXED),
+            (MAX_TRANSPORT_OFFERS_PER_LEG + 10, MAX_TRANSPORT_PAIRS, MAX_COMBINATIONS_RELAXED),
+            (
+                MAX_TRANSPORT_OFFERS_PER_LEG + 10,
+                MAX_TRANSPORT_PAIRS * 2,
+                MAX_COMBINATIONS_RELAXED,
+            ),
+            (
+                MAX_TRANSPORT_OFFERS_PER_LEG + 20,
+                MAX_TRANSPORT_PAIRS * 4,
+                MAX_COMBINATIONS_RELAXED,
+            ),
+        )
+
+    def _combination_request_stages(
+        self,
+        request: TripRequest,
+    ) -> tuple[tuple[TripRequest, str | None], ...]:
+        base = (request, None)
+        has_windows = (
+            request.transport.departure_window is not None
+            or request.transport.return_window is not None
+        )
+        has_transfers = request.transport.max_transfers is not None
+        variants: list[tuple[TripRequest, str | None]] = [base]
+        if has_windows:
+            relaxed_window = request.model_copy(
+                update={
+                    "transport": TransportPreferences(
+                        allowed_modes=request.transport.allowed_modes,
+                        max_transfers=request.transport.max_transfers,
+                    )
+                }
+            )
+            variants.append((relaxed_window, "Время отправления выходит за предпочитаемое окно."))
+        if has_transfers:
+            relaxed_transfers = request.model_copy(
+                update={
+                    "transport": TransportPreferences(
+                        allowed_modes=request.transport.allowed_modes,
+                        departure_window=request.transport.departure_window,
+                        return_window=request.transport.return_window,
+                        max_transfers=None,
+                    )
+                }
+            )
+            variants.append((relaxed_transfers, "Ограничение на количество пересадок ослаблено."))
+        if has_windows and has_transfers:
+            variants.append(
+                (
+                    request.model_copy(
+                        update={
+                            "transport": TransportPreferences(
+                                allowed_modes=request.transport.allowed_modes,
+                            )
+                        }
+                    ),
+                    "Поиск идёт с расширенными параметрами маршрута.",
+                )
+            )
+        seen: dict[str, str | None] = {}
+        ordered: list[tuple[TripRequest, str | None]] = []
+        for request_variant, reason in variants:
+            key = repr(
+                (
+                    request_variant.transport.allowed_modes,
+                    request_variant.transport.max_transfers,
+                    request_variant.transport.departure_window,
+                    request_variant.transport.return_window,
+                )
+            )
+            if key not in seen:
+                seen[key] = reason
+                ordered.append((request_variant, reason))
+        return tuple(ordered)
+
     async def _search_leg(self, query: TransportSearchQuery) -> list[TransportOffer]:
-        offers = list(await self._gateway.search_transport(query))
+        offers = self._offers_with_exact_checkout(list(await self._gateway.search_transport(query)))
         if offers or len(query.allowed_modes) == 1:
             return offers
         fallback_modes = (
@@ -311,8 +411,10 @@ class TripPlanner:
         for mode in fallback_modes[:2]:
             try:
                 offers.extend(
-                    await self._gateway.search_transport(
-                        query.model_copy(update={"allowed_modes": frozenset({mode})})
+                    self._offers_with_exact_checkout(
+                        await self._gateway.search_transport(
+                            query.model_copy(update={"allowed_modes": frozenset({mode})})
+                        )
                     )
                 )
             except ProviderError:
@@ -320,6 +422,23 @@ class TripPlanner:
             if offers:
                 break
         return offers
+
+    @staticmethod
+    def _offers_with_exact_checkout(
+        offers: list[TransportOffer] | tuple[TransportOffer, ...],
+    ) -> list[TransportOffer]:
+        """Exclude modes for which Tutu cannot open the selected departure for checkout."""
+        unsupported_modes = {
+            TransportMode.ETRAIN,
+            TransportMode.MIXED,
+            TransportMode.UNKNOWN,
+        }
+        return [
+            offer
+            for offer in offers
+            if offer.mode not in unsupported_modes
+            and not (offer.mode is TransportMode.AVIA and offer.transfers != 0)
+        ]
 
     @staticmethod
     def _transport_query(request: TripRequest, *, outbound: bool) -> TransportSearchQuery:

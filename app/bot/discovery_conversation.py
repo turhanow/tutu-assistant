@@ -16,6 +16,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from app.bot.callbacks import CallbackCodec, DiscoveryAction, DiscoveryCallback
 from app.bot.discovery_formatters import (
+    format_details,
+    format_inspiration,
     format_program,
     format_proposal_sections,
     format_shortlist,
@@ -72,6 +74,8 @@ _SHORTLIST = "discovery_shortlist"
 _FEASIBILITY = "discovery_feasibility"
 _PROPOSALS = "discovery_proposals"
 _CHECKOUT_ITEMS = "discovery_checkout_items"
+_COPIES = "discovery_proposal_copies"
+_INSPIRATION_MODE = "discovery_inspiration_mode"
 _REJECTED_INDEX = "discovery_rejected_index"
 _PENDING_FIELD = "discovery_pending_field"
 _ANALYTICS_FLOW_ID = "flow_id"
@@ -124,6 +128,7 @@ class DiscoveryConversation:
             return ConversationHandler.END
         context.user_data.clear()
         self._initialize_flow(context)
+        context.user_data[_INSPIRATION_MODE] = True
         await self._track(
             "conversation_started",
             context,
@@ -134,6 +139,12 @@ class DiscoveryConversation:
             parse_mode=ParseMode.HTML,
         )
         return DiscoveryState.INTAKE
+
+    async def start_from_origin(self, update: Update, context, origin: str) -> int:
+        state = await self.start(update, context)
+        if state is DiscoveryState.INTAKE:
+            context.user_data[_DRAFT] = DiscoveryDraft(origin=origin)
+        return state
 
     async def intake(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         message = update.effective_message
@@ -195,7 +206,16 @@ class DiscoveryConversation:
                 intent=parsed.intent,
                 dimensions={"flow_type": parsed.intent.value},
             )
-        context.user_data[_DRAFT] = parsed.discovery_draft
+        # The onboarding router may seed the origin before the user's first free-form
+        # discovery prompt. LLM extraction is intentionally allowed to omit facts that
+        # are already present in conversation context, so merge instead of overwriting
+        # the seeded draft.
+        current = context.user_data.get(_DRAFT)
+        context.user_data[_DRAFT] = (
+            _merge_discovery_drafts(current, parsed.discovery_draft)
+            if isinstance(current, DiscoveryDraft)
+            else parsed.discovery_draft
+        )
         if progress is not None:
             await progress.edit_text("Понял настроение поездки. Проверяю, хватает ли вводных.")
         return await self._continue(message, context)
@@ -303,10 +323,13 @@ class DiscoveryConversation:
         if parsed.discovery_draft is None:
             await progress.edit_text("Не получилось применить изменение к текущей подборке.")
             return DiscoveryState.REFINE
-        context.user_data[_DRAFT] = _merge_discovery_drafts(
-            current,
-            parsed.discovery_draft,
-        )
+        if context.user_data.get(_INSPIRATION_MODE, True):
+            updated = _merge_discovery_drafts(current, parsed.discovery_draft)
+        else:
+            updated = parsed.discovery_draft
+            if updated.origin is None and current.origin is not None:
+                updated = updated.model_copy(update={"origin": current.origin})
+        context.user_data[_DRAFT] = updated
         self._advance_revision(context)
         await progress.edit_text("Пожелания обновлены. Пересобираю направления.")
         return await self._continue(message, context)
@@ -335,10 +358,29 @@ class DiscoveryConversation:
                     dimensions={"flow_type": "destination_unknown"},
                 )
                 await query.message.reply_text(
-                    format_program(recommendation),
+                    format_details(
+                        recommendation,
+                        self._checkout_items_for(context, recommendation),
+                    ),
                     parse_mode=ParseMode.HTML,
                 )
             return DiscoveryState.RESULTS
+        if callback.action is DiscoveryAction.PLAN:
+            recommendation = self._recommendation(context, callback.argument)
+            if recommendation is None:
+                await query.message.reply_text("Этот вариант больше недоступен.")
+            else:
+                await query.message.reply_text(
+                    format_program(
+                        recommendation,
+                        self._checkout_items_for(context, recommendation),
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            return DiscoveryState.RESULTS
+        if callback.action is DiscoveryAction.COMPARE:
+            context.user_data[_INSPIRATION_MODE] = False
+            return await self._show_proposals(query.message, context, query.message)
         if callback.action is DiscoveryAction.REFINE:
             await query.message.reply_text(
                 "Что изменить? Например: «дешевле», «меньше времени в дороге» или «больше природы»."
@@ -444,7 +486,14 @@ class DiscoveryConversation:
         try:
             request = build_discovery_request(draft, today=self._clock.now().date())
         except DiscoveryInputError as error:
-            await message.reply_text(f"Не удалось проверить параметры: {error}")
+            field = error.field if error.field in {"origin", "dates", "motives"} else None
+            if field is not None:
+                context.user_data[_PENDING_FIELD] = field
+            logger.info(
+                "discovery_input_rejected",
+                extra={"event": "discovery_input_rejected", "field": error.field},
+            )
+            await message.reply_text(str(error))
             return DiscoveryState.CLARIFY
         progress = await message.reply_text(
             self._voice.progress("discovery_select", context.user_data)
@@ -546,6 +595,35 @@ class DiscoveryConversation:
             )
         else:
             copies = fallback_proposal_copies(project_grounded_facts(proposals.recommendations))
+        context.user_data[_COPIES] = copies
+        if context.user_data.get(_INSPIRATION_MODE, True):
+            await self._track(
+                "inspiration_shown",
+                context,
+                dimensions={
+                    "flow_type": "destination_unknown",
+                    "proposal_count": len(proposals.recommendations),
+                },
+            )
+            await progress.edit_text(
+                format_inspiration(proposals.recommendations, copies),
+                parse_mode=ParseMode.HTML,
+                reply_markup=self._inspiration_keyboard(context),
+            )
+            return DiscoveryState.RESULTS
+        return await self._show_proposals(message, context, progress)
+
+    async def _show_proposals(self, message, context, progress) -> int:
+        proposals = context.user_data.get(_PROPOSALS)
+        feasibility = context.user_data.get(_FEASIBILITY)
+        copies = context.user_data.get(_COPIES)
+        if (
+            not isinstance(proposals, DiscoveryProposalResult)
+            or not isinstance(feasibility, DiscoveryFeasibilityResult)
+            or not isinstance(copies, tuple)
+        ):
+            await progress.edit_text("Подборка устарела. Начните заново: /ideas")
+            return DiscoveryState.RESULTS
         checkout_items = await self._resolve_inline_checkout_items(proposals, feasibility)
         context.user_data[_CHECKOUT_ITEMS] = checkout_items
         messages = pack_html_sections(
@@ -618,24 +696,10 @@ class DiscoveryConversation:
             ]
             for item in items
         ]
-        has_schedule_link = any(item.link.kind == "schedule_url" for item in items)
-        has_broad_link = any(
-            not TripHandoffService.is_offer_specific(item) and item.link.kind != "schedule_url"
-            for item in items
-        )
-        link_scope = ""
-        if has_schedule_link:
-            link_scope += (
-                " Для электричек Tutu открывает расписание на выбранную дату, а не "
-                "конкретный рейс: сверьте время из рекомендации."
-            )
-        if has_broad_link:
-            link_scope += " Для остальных кнопок без deeplink откроется список вариантов."
-        if not has_schedule_link and not has_broad_link:
-            link_scope = " Кнопки ведут к выбранным билетам и отелю."
         await status.edit_text(
             "Проверьте актуальную цену и условия на Tutu. Компоненты могут оформляться "
-            "отдельно; переход не резервирует места." + link_scope,
+            "отдельно; переход не резервирует места. Кнопки ведут к выбранным билетам "
+            "и отелю.",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         await self._track(
@@ -710,6 +774,15 @@ class DiscoveryConversation:
         except IndexError:
             return None
 
+    @staticmethod
+    def _checkout_items_for(context, recommendation) -> tuple[TripCheckoutItem, ...]:
+        cached = context.user_data.get(_CHECKOUT_ITEMS)
+        if not isinstance(cached, dict):
+            return ()
+        destination_id = recommendation.proposal.candidate.destination.destination_id
+        items = cached.get(destination_id)
+        return tuple(items) if isinstance(items, (tuple, list)) else ()
+
     def _proposals_keyboard(self, context, result) -> InlineKeyboardMarkup:
         rows: list[list[InlineKeyboardButton]] = []
         for index, recommendation in enumerate(result.recommendations):
@@ -717,11 +790,19 @@ class DiscoveryConversation:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"План на 2 дня · {name}",
+                        f"Подробнее · {name}",
                         callback_data=self._callback(context, DiscoveryAction.DETAILS, str(index)),
                     ),
                     InlineKeyboardButton(
-                        "К оформлению",
+                        "План на 2 дня",
+                        callback_data=self._callback(context, DiscoveryAction.PLAN, str(index)),
+                    ),
+                ]
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"К оформлению · {name}",
                         callback_data=self._callback(context, DiscoveryAction.HANDOFF, str(index)),
                     ),
                 ]
@@ -736,6 +817,24 @@ class DiscoveryConversation:
             )
         rows.extend(self._control_rows(context))
         return InlineKeyboardMarkup(rows)
+
+    def _inspiration_keyboard(self, context) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "Решились? Подобрать варианты",
+                        callback_data=self._callback(context, DiscoveryAction.COMPARE),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "Начать заново",
+                        callback_data=self._callback(context, DiscoveryAction.NEW),
+                    )
+                ],
+            ]
+        )
 
     def _result_controls_keyboard(self, context) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(self._control_rows(context))
@@ -824,6 +923,8 @@ class DiscoveryConversation:
         context.user_data[_REVISION] = int(context.user_data.get(_REVISION, 0)) + 1
         context.user_data.pop(_PROPOSALS, None)
         context.user_data.pop(_FEASIBILITY, None)
+        context.user_data.pop(_COPIES, None)
+        context.user_data.pop(_CHECKOUT_ITEMS, None)
 
     def _safety_identifier(self, update: Update) -> str | None:
         user = getattr(update, "effective_user", None)

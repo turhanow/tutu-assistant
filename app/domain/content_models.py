@@ -66,6 +66,7 @@ class Activity(DomainModel):
     activity_id: ContentId
     destination_id: ContentId
     name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=10, max_length=400)
     categories: frozenset[str] = Field(min_length=1)
     duration: timedelta = Field(gt=timedelta(0), le=timedelta(hours=12))
     estimated_cost: PriceRange | None = None
@@ -101,6 +102,9 @@ class DestinationProfile(DomainModel):
     destination_id: ContentId
     name: str = Field(min_length=1, max_length=200)
     region: str = Field(min_length=1, max_length=200)
+    short_description: str | None = Field(default=None, min_length=10, max_length=240)
+    full_description: str | None = Field(default=None, min_length=20, max_length=700)
+    taxi_available: bool | None = None
     aliases: frozenset[str] = frozenset()
     experience_tags: frozenset[str] = Field(min_length=1)
     season_months: frozenset[int] = Field(default_factory=lambda: frozenset(range(1, 13)))

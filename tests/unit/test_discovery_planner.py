@@ -219,14 +219,10 @@ async def test_planner_checks_later_candidates_until_three_complete_options_exis
 
     result = await planner(gateway).verify(shortlist(count=6))
 
-    verified = [
-        item for item in result.snapshots if item.status is FeasibilityStatus.VERIFIED
-    ]
+    verified = [item for item in result.snapshots if item.status is FeasibilityStatus.VERIFIED]
     assert len(verified) >= 3
     assert len(gateway.hotel_calls) == 6
-    assert {"city_2", "city_3", "city_4"}.issubset(
-        {item.destination_id for item in verified}
-    )
+    assert {"city_2", "city_3", "city_4"}.issubset({item.destination_id for item in verified})
 
 
 @pytest.mark.asyncio

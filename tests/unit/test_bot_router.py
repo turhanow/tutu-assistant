@@ -139,17 +139,17 @@ async def test_router_failure_offers_explicit_choice_and_start_has_both_examples
 
     state = await router.start(start_update, context)
 
-    assert state is RouterState.INTAKE
+    assert state is RouterState.LOCATION
     assert "old" not in context.user_data
     assert len(context.user_data["flow_id"]) == 8
     start_text = start_update.effective_message.reply_text.call_args.args[0]
-    assert "Если город уже есть" in start_text
-    assert "предложу несколько проверенных идей" in start_text
+    assert "укажите город отправления" in start_text
+    assert "геопозицией" in start_text
     start_keyboard = start_update.effective_message.reply_text.call_args.kwargs["reply_markup"]
-    assert [row[0].callback_data for row in start_keyboard.inline_keyboard] == [
-        "route:known",
-        "route:ideas",
-    ]
+    assert start_keyboard.keyboard[0][0].request_location is True
+    assert start_keyboard.keyboard[1][0].text == "Москва"
+    assert start_keyboard.keyboard[2][0].text == "Указать город текстом"
+    assert start_keyboard.one_time_keyboard is False
 
     intake_update, progress = update("неясно")
     state = await router.intake(intake_update, context)
@@ -157,9 +157,85 @@ async def test_router_failure_offers_explicit_choice_and_start_has_both_examples
     assert state is RouterState.INTAKE
     keyboard = progress.edit_text.call_args.kwargs["reply_markup"]
     assert [row[0].callback_data for row in keyboard.inline_keyboard] == [
-        "route:known",
         "route:ideas",
+        "route:known",
     ]
+
+
+@pytest.mark.asyncio
+async def test_onboarding_accepts_moscow_geo_without_storing_coordinates() -> None:
+    router = BotRouter(
+        Extractor(),  # type: ignore[arg-type]
+        KnownConversation(),  # type: ignore[arg-type]
+        IdeasConversation(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    incoming, _ = update("")
+    incoming.effective_message.location = SimpleNamespace(
+        latitude=55.75,
+        longitude=37.62,
+    )
+    context = SimpleNamespace(user_data={})
+
+    state = await router.location_input(incoming, context)
+
+    assert state is RouterState.CHOICE
+    assert context.user_data == {"onboarding_origin": "Москва"}
+    replies = incoming.effective_message.reply_text.call_args_list
+    assert replies[-2].args[0] == ("✅ Геопозиция получена. Выбран город отправления: Москва.")
+    keyboard = replies[-1].kwargs["reply_markup"]
+    assert [row[0].callback_data for row in keyboard.inline_keyboard] == [
+        "route:ideas",
+        "route:known",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_onboarding_accepts_origin_as_text() -> None:
+    router = BotRouter(
+        Extractor(),  # type: ignore[arg-type]
+        KnownConversation(),  # type: ignore[arg-type]
+        IdeasConversation(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    incoming, _ = update("Тула")
+    incoming.effective_message.location = None
+    context = SimpleNamespace(user_data={})
+
+    state = await router.location_input(incoming, context)
+
+    assert state is RouterState.CHOICE
+    assert context.user_data["onboarding_origin"] == "Тула"
+    replies = incoming.effective_message.reply_text.call_args_list
+    assert replies[-2].args[0] == "Выбран город отправления: Тула."
+    assert "Геопозиция получена" not in replies[-2].args[0]
+
+
+@pytest.mark.asyncio
+async def test_onboarding_confirms_received_geo_when_city_cannot_be_resolved() -> None:
+    router = BotRouter(
+        Extractor(),  # type: ignore[arg-type]
+        KnownConversation(),  # type: ignore[arg-type]
+        IdeasConversation(),  # type: ignore[arg-type]
+        FakeClock(),
+        timezone="Europe/Moscow",
+    )
+    incoming, _ = update("")
+    incoming.effective_message.location = SimpleNamespace(
+        latitude=59.94,
+        longitude=30.32,
+    )
+    context = SimpleNamespace(user_data={})
+
+    state = await router.location_input(incoming, context)
+
+    assert state is RouterState.LOCATION
+    assert "onboarding_origin" not in context.user_data
+    reply = incoming.effective_message.reply_text.call_args.args[0]
+    assert reply.startswith("📍 Геопозиция получена")
+    assert "Напишите город отправления текстом" in reply
 
 
 @pytest.mark.asyncio

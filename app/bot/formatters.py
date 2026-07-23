@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from html import escape
@@ -12,10 +13,12 @@ from app.domain.models import (
     RankedTripOption,
     SortPreference,
     TransportMode,
+    TripCheckoutItem,
     TripComponent,
     TripRequest,
     TripSearchResult,
 )
+from app.services.map_links import build_yandex_maps_search_url
 
 MONTHS = (
     "",
@@ -113,13 +116,22 @@ def format_confirmation(request: TripRequest) -> str:
     return "\n".join(lines)
 
 
-def format_results(result: TripSearchResult) -> str:
+def format_results(
+    result: TripSearchResult,
+    checkout_items: Mapping[int, Sequence[TripCheckoutItem]] | None = None,
+) -> str:
     if not result.options:
         reason = result.failures[0].user_message if result.failures else "Варианты не найдены"
         return f"<b>На этих условиях поездка пока не складывается</b>\n{escape(reason)}"
     cards = ["<b>Вот что складывается на эти даты</b>"]
     for index, option in enumerate(result.options, start=1):
-        cards.append(_format_option(index, option))
+        cards.append(
+            _format_option(
+                index,
+                option,
+                tuple((checkout_items or {}).get(index - 1, ())),
+            )
+        )
     if result.failures:
         cards.append("Часть данных недоступна: " + escape(result.failures[0].user_message))
     return "\n\n".join(cards)
@@ -149,7 +161,11 @@ def format_details(component: TripComponent, details: OfferDetails) -> str:
     return "\n".join(lines)
 
 
-def _format_option(index: int, option: RankedTripOption) -> str:
+def _format_option(
+    index: int,
+    option: RankedTripOption,
+    checkout_items: Sequence[TripCheckoutItem] = (),
+) -> str:
     combination = option.combination
     price = combination.price
     if price.known_total is None:
@@ -158,24 +174,37 @@ def _format_option(index: int, option: RankedTripOption) -> str:
         qualifier = "от " if price.missing_components else ""
         price_text = qualifier + format_money(price.known_total, price.currency or "")
     title, explanation = format_ranking(option.labels)
+    checkout_by_component = {item.component: item for item in checkout_items}
     lines = [
         f"<b>{index}. {title}</b>",
         explanation,
-        _format_leg("Туда", combination.outbound),
-        _format_leg("Обратно", combination.return_offer),
+        _format_leg(
+            "Туда",
+            combination.outbound,
+            checkout_by_component.get(TripComponent.OUTBOUND),
+        ),
+        _format_leg(
+            "Обратно",
+            combination.return_offer,
+            checkout_by_component.get(TripComponent.RETURN),
+        ),
         f"🕒 В дороге: {_format_duration(combination.metrics.total_travel_duration)}",
         f"В городе: {_format_duration(combination.metrics.time_in_city)}",
     ]
     if combination.hotel is not None and combination.stay is not None:
         nights = _plural(combination.stay.nights, "ночь", "ночи", "ночей")
-        room = (
-            f" · номер: {escape(combination.hotel.room_name)}"
-            if combination.hotel.room_name
-            else ""
+        hotel_map_url = build_yandex_maps_search_url(
+            name=combination.hotel.name,
         )
+        hotel_name = _html_link(escape(combination.hotel.name), hotel_map_url)
+        room_name = escape(combination.hotel.room_name) if combination.hotel.room_name else None
+        hotel_checkout = checkout_by_component.get(TripComponent.HOTEL)
+        if room_name is not None and hotel_checkout is not None:
+            room_name = _html_link(room_name, str(hotel_checkout.link.url))
+        room = f" · номер: {room_name}" if room_name is not None else ""
         lines.extend(
             (
-                f"🏨 Отель: {escape(combination.hotel.name)}{room}",
+                f"🏨 Отель: {hotel_name}{room}",
                 f"Проживание: {_format_date(combination.stay.check_in)} — "
                 f"{_format_date(combination.stay.check_out)}, {nights}",
             )
@@ -270,7 +299,11 @@ def format_money(amount: Decimal, currency: str) -> str:
     return f"{rendered} {suffix}".rstrip()
 
 
-def _format_leg(label: str, offer) -> str:
+def _format_leg(
+    label: str,
+    offer,
+    checkout_item: TripCheckoutItem | None = None,
+) -> str:
     transfers = (
         "пересадки не указаны"
         if offer.transfers is None
@@ -283,6 +316,13 @@ def _format_leg(label: str, offer) -> str:
         service += f" № {escape(offer.service_number)}"
     if offer.carrier:
         service += f" · {escape(offer.carrier)}"
+    if checkout_item is not None and checkout_item.link.kind in {
+        "direct_offer",
+        "hotel_page",
+        "deeplink",
+        "checkout_deeplink",
+    }:
+        service = _html_link(service, str(checkout_item.link.url))
     price = (
         f" · {format_money(offer.price, offer.currency or '')}" if offer.price is not None else ""
     )
@@ -291,6 +331,10 @@ def _format_leg(label: str, offer) -> str:
         f"{_format_datetime(offer.departure_at)} → {_format_datetime(offer.arrival_at)} · "
         f"{transfers}{price}"
     )
+
+
+def _html_link(label: str, url: str) -> str:
+    return f'<a href="{escape(url, quote=True)}">{label}</a>'
 
 
 def _format_datetime(value: datetime) -> str:

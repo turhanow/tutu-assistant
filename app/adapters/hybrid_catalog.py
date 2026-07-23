@@ -11,7 +11,6 @@ from app.ports.catalog import DestinationCatalog
 from app.ports.content import TravelContentGateway
 
 logger = logging.getLogger(__name__)
-MIN_DYNAMIC_PRIMARY_SIZE = 5
 
 
 class HybridDestinationCatalog:
@@ -39,8 +38,6 @@ class HybridDestinationCatalog:
         except (LlmParseError, LlmProviderError, TimeoutError, ValueError):
             logger.warning("dynamic_destination_discovery_fallback", exc_info=True)
             dynamic = ()
-        if len(dynamic) >= min(limit, MIN_DYNAMIC_PRIMARY_SIZE):
-            return dynamic[:limit]
         fallback = await self._fallback.find_candidates(request, limit=limit)
         seen_names = {item.name.casefold() for item in dynamic}
         supplement = tuple(item for item in fallback if item.name.casefold() not in seen_names)

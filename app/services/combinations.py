@@ -30,6 +30,7 @@ MAX_HOTEL_OFFERS = 5
 MAX_TRANSPORT_PAIRS = 24
 MAX_HOTELS_PER_PAIR = 2
 MAX_COMBINATIONS = 50
+MAX_COMBINATIONS_RELAXED = 75
 
 HotelOffersByStay = Mapping[tuple[date, date], Sequence[HotelOffer]]
 
@@ -40,8 +41,20 @@ def build_combinations(
     return_offers: Sequence[TransportOffer],
     hotel_offers: Sequence[HotelOffer] = (),
     hotel_offers_by_stay: HotelOffersByStay | None = None,
+    *,
+    allow_transport_only: bool = False,
+    max_transport_offers_per_leg: int = MAX_TRANSPORT_OFFERS_PER_LEG,
+    max_transport_pairs: int = MAX_TRANSPORT_PAIRS,
+    max_combinations: int = MAX_COMBINATIONS,
 ) -> list[TripCombination]:
-    pairs = build_transport_pairs(request, outbound_offers, return_offers)
+    pairs = build_transport_pairs(
+        request,
+        outbound_offers,
+        return_offers,
+        max_transport_offers_per_leg=max_transport_offers_per_leg,
+        max_transport_pairs=max_transport_pairs,
+    )
+    has_overnight = request.return_date > request.departure_date
     combinations: list[TripCombination] = []
     for outbound_offer, return_offer in pairs:
         try:
@@ -54,9 +67,15 @@ def build_combinations(
             else hotel_offers
         )
         hotels = _eligible_hotels(offers_for_stay, stay, request.hotel)
+        if request.hotel.mode is HotelMode.REQUIRED and not hotels and allow_transport_only:
+            if has_overnight:
+                combination = _combination(request, outbound_offer, return_offer, None, None)
+                if combination is not None:
+                    combinations.append(combination)
+            continue
         if request.hotel.mode is HotelMode.REQUIRED and not hotels:
             continue
-        if request.hotel.mode is not HotelMode.REQUIRED and stay is None:
+        if request.hotel.mode is not HotelMode.REQUIRED and not has_overnight and stay is None:
             combination = _combination(request, outbound_offer, return_offer, None, None)
             if combination is not None:
                 combinations.append(combination)
@@ -65,38 +84,50 @@ def build_combinations(
                 combination = _combination(request, outbound_offer, return_offer, hotel, stay)
                 if combination is not None:
                     combinations.append(combination)
-        if len(combinations) >= MAX_COMBINATIONS:
+        if len(combinations) >= max_combinations:
             break
-    return _dedupe_combinations(combinations)[:MAX_COMBINATIONS]
+    return _dedupe_combinations(combinations)[:max_combinations]
 
 
 def build_transport_pairs(
     request: TripRequest,
     outbound_offers: Sequence[TransportOffer],
     return_offers: Sequence[TransportOffer],
+    *,
+    max_transport_offers_per_leg: int = MAX_TRANSPORT_OFFERS_PER_LEG,
+    max_transport_pairs: int = MAX_TRANSPORT_PAIRS,
 ) -> list[tuple[TransportOffer, TransportOffer]]:
     """Return the bounded set of feasible pairs used by all downstream searches."""
-    outbound = _dedupe_transport(outbound_offers)[:MAX_TRANSPORT_OFFERS_PER_LEG]
-    returns = _dedupe_transport(return_offers)[:MAX_TRANSPORT_OFFERS_PER_LEG]
+    outbound = _dedupe_transport(outbound_offers)[:max_transport_offers_per_leg]
+    returns = _dedupe_transport(return_offers)[:max_transport_offers_per_leg]
     feasible = [
         (outbound_offer, return_offer)
         for outbound_offer in outbound
         for return_offer in returns
         if _feasible_pair(request, outbound_offer, return_offer)
     ]
-    return _diverse_transport_pairs(feasible)
+    return _diverse_transport_pairs(feasible, max_pairs=max_transport_pairs)
 
 
 def required_hotel_stays(
     request: TripRequest,
     outbound_offers: Sequence[TransportOffer],
     return_offers: Sequence[TransportOffer],
+    *,
+    max_transport_offers_per_leg: int = MAX_TRANSPORT_OFFERS_PER_LEG,
+    max_transport_pairs: int = MAX_TRANSPORT_PAIRS,
 ) -> tuple[HotelStay, ...]:
     """Return unique exact stays required by feasible transport pairs."""
     if request.hotel.mode is HotelMode.FORBIDDEN:
         return ()
     unique: dict[tuple[date, date], HotelStay] = {}
-    for outbound, return_offer in build_transport_pairs(request, outbound_offers, return_offers):
+    for outbound, return_offer in build_transport_pairs(
+        request,
+        outbound_offers,
+        return_offers,
+        max_transport_offers_per_leg=max_transport_offers_per_leg,
+        max_transport_pairs=max_transport_pairs,
+    ):
         try:
             stay = calculate_hotel_stay(outbound, return_offer, request.hotel.mode)
         except TutuAssistantError:
@@ -192,6 +223,8 @@ def _select_hotels(hotels: Sequence[HotelOffer]) -> list[HotelOffer]:
 
 def _diverse_transport_pairs(
     pairs: Sequence[tuple[TransportOffer, TransportOffer]],
+    *,
+    max_pairs: int = MAX_TRANSPORT_PAIRS,
 ) -> list[tuple[TransportOffer, TransportOffer]]:
     """Keep cheap, fast and convenient pairs instead of truncating a Cartesian product."""
 
@@ -212,9 +245,9 @@ def _diverse_transport_pairs(
                 continue
             seen.add(signature)
             selected.append(pair)
-            if len(selected) == MAX_TRANSPORT_PAIRS:
+            if len(selected) == max_pairs:
                 return selected
-    return selected
+    return selected[:max_pairs]
 
 
 def _pair_price_key(pair: tuple[TransportOffer, TransportOffer]) -> tuple:

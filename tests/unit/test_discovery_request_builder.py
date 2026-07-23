@@ -133,7 +133,7 @@ def test_builder_rejects_past_reversed_and_oversized_windows() -> None:
             ),
             today=TODAY,
         )
-    with pytest.raises(DiscoveryInputError, match="15 calendar days"):
+    with pytest.raises(DiscoveryInputError, match="слишком широкий период") as error:
         build_discovery_request(
             complete_draft(
                 departure_date=date(2026, 8, 1),
@@ -141,6 +141,20 @@ def test_builder_rejects_past_reversed_and_oversized_windows() -> None:
             ),
             today=TODAY,
         )
+    assert error.value.field == "dates"
+
+
+def test_month_sized_window_is_treated_as_dates_needing_clarification() -> None:
+    draft = complete_draft(
+        departure_date=date(2026, 8, 1),
+        return_date=date(2026, 8, 31),
+        date_flexibility=DateFlexibility.RANGE,
+    )
+
+    assert "dates" in missing_discovery_fields(draft)
+    question = plan_clarifications(draft, limit=1)[0]
+    assert question.field == "dates"
+    assert "конкретные даты" in question.text
 
 
 def test_clarification_policy_prioritizes_critical_and_never_exceeds_three() -> None:

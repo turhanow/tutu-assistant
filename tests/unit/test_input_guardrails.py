@@ -59,8 +59,12 @@ def test_recovery_preserves_route_and_labelled_reversed_dates() -> None:
     ("text", "expected"),
     [
         ("29–30 августа", (date(2026, 8, 29), date(2026, 8, 30))),
+        ("25-26 авг", (date(2026, 8, 25), date(2026, 8, 26))),
+        ("25-26 авг 2026", (date(2026, 8, 25), date(2026, 8, 26))),
         ("29-30.08.2026", (date(2026, 8, 29), date(2026, 8, 30))),
         ("31 декабря — 2 января", (date(2026, 12, 31), date(2027, 1, 2))),
+        ("завтра и послезавтра", (date(2026, 7, 23), date(2026, 7, 24))),
+        ("в эти выходные", (date(2026, 7, 25), date(2026, 7, 26))),
     ],
 )
 def test_explicit_date_range_preserves_user_order(text: str, expected) -> None:

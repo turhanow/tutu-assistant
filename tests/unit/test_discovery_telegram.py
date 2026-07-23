@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,6 +13,7 @@ from app.bot.discovery_conversation import (
     _no_proposals_message,
 )
 from app.bot.discovery_formatters import (
+    format_details,
     format_program,
     format_proposal_sections,
     pack_html_sections,
@@ -173,6 +174,28 @@ def telegram_update(message, *, user_id: int = 42):
     )
 
 
+@pytest.mark.asyncio
+async def test_onboarding_origin_survives_first_free_form_discovery_prompt() -> None:
+    extracted = complete_draft(origin=None)
+    service, *_ = conversation(parsed(extracted))
+    context = SimpleNamespace(user_data={})
+    intro_message, _ = telegram_message()
+
+    start_state = await service.start_from_origin(
+        telegram_update(intro_message),
+        context,
+        "Москва",
+    )
+    request_message, _ = telegram_message(
+        "В эти выходные хочу старинный город с усадьбами, без суеты"
+    )
+    result_state = await service.intake(telegram_update(request_message), context)
+
+    assert start_state is DiscoveryState.INTAKE
+    assert result_state is DiscoveryState.RESULTS
+    assert context.user_data["discovery_draft"].origin == "Москва"
+
+
 def conversation(*extractor_results, handoff=None, analytics=None, selector=None):
     extractor = FakeExtractor(*extractor_results)
     selector = selector or FakeSelector()
@@ -219,9 +242,7 @@ def test_every_recommendation_has_its_own_itinerary_button() -> None:
         ),
         completed_at=NOW,
     )
-    context = SimpleNamespace(
-        user_data={"discovery_flow_id": "abcd1234", "discovery_revision": 1}
-    )
+    context = SimpleNamespace(user_data={"discovery_flow_id": "abcd1234", "discovery_revision": 1})
 
     keyboard = service._proposals_keyboard(context, result)
 
@@ -233,17 +254,19 @@ def test_every_recommendation_has_its_own_itinerary_button() -> None:
 def test_discovery_formatters_keep_money_classes_separate_and_split_on_sections() -> None:
     recommendation = rank_proposals((proposal("city_a"),))[0]
     days = recommendation.proposal.days
-    linked_activity = days[0].activities[0].activity.model_copy(
-        update={
-            "address": "Советская улица, 3",
-            "map_url": "https://yandex.ru/maps/?text=Test%20Place%2C%20City",
-        }
+    linked_activity = (
+        days[0]
+        .activities[0]
+        .activity.model_copy(
+            update={
+                "address": "Советская улица, 3",
+                "map_url": "https://yandex.ru/maps/?text=Test%20Place%2C%20City",
+            }
+        )
     )
     linked_schedule = days[0].activities[0].model_copy(update={"activity": linked_activity})
     days = (
-        days[0].model_copy(
-            update={"activities": (linked_schedule, *days[0].activities[1:])}
-        ),
+        days[0].model_copy(update={"activities": (linked_schedule, *days[0].activities[1:])}),
         *days[1:],
     )
     recommendation = recommendation.model_copy(
@@ -316,15 +339,33 @@ def test_discovery_formatters_keep_money_classes_separate_and_split_on_sections(
     assert "поезд № 6104 · ЦППК</a> · 22.08, 15:00 → 22.08, 17:00" in rendered
     assert "Обратно: автобус № B-42 · Тестовый перевозчик · 23.08, 18:00" in rendered
     assert 'href="https://www.tutu.ru/booking/outbound"' in rendered
-    assert "расписание на Tutu</a>" in rendered
+    assert "расписание на Tutu</a>" not in rendered
     assert "Выбор дороги: лучший баланс цены, времени в пути" in rendered
-    assert "Чем заняться:" in rendered
-    assert '<a href="https://yandex.ru/maps/?text=Test%20Place%2C%20City">' in rendered
-    assert rendered.index("Чем заняться:") < rendered.index("Туда:")
+    assert "Коротко:" in rendered
+    assert "Test%20Place%2C%20City" in rendered
+    assert rendered.index("Коротко:") < rendered.index("Туда:")
     assert "Что делать:" not in rendered
-    assert "Программа:" in format_program(recommendation)
-    assert len(messages) == 2
-    assert all(len(item) <= section_limit for item in messages)
+    assert "План на 2 дня:" in format_program(recommendation)
+    assert messages
+
+
+def test_message_packer_counts_visible_text_instead_of_long_checkout_url() -> None:
+    long_checkout_url = "https://www.tutu.ru/booking?payload=" + ("x" * 6_000)
+    section = f'<a href="{long_checkout_url}">Конкретный билет</a> · 25.07, 10:00'
+
+    messages = pack_html_sections((section,), limit=100)
+
+    assert messages == (section,)
+    assert long_checkout_url in messages[0]
+
+
+def test_message_packer_splits_truly_long_visible_card_without_failure() -> None:
+    section = "\n".join(f"Строка {index}: " + ("текст " * 8) for index in range(12))
+
+    messages = pack_html_sections((section,), limit=100)
+
+    assert len(messages) > 1
+    assert all(len(message) <= 100 for message in messages)
 
 
 def test_proposal_uses_suggestions_when_no_activity_fits_schedule() -> None:
@@ -359,25 +400,21 @@ def test_proposal_uses_suggestions_when_no_activity_fits_schedule() -> None:
 
     rendered = "\n".join(format_proposal_sections((recommendation,), (copy,)))
 
-    assert "Чем заняться:" in rendered
-    assert "Suggested%20Museum" in rendered
+    assert "Коротко:" in rendered
+    assert "Активность 1" in rendered
 
 
 def test_hotel_without_room_name_keeps_map_and_booking_links_separate() -> None:
     recommendation = rank_proposals((proposal("city_a"),))[0]
     trip_option = recommendation.proposal.trip_option
     combination = trip_option.combination
-    hotel = search_result().options[0].combination.hotel.model_copy(
-        update={"room_name": None}
-    )
+    hotel = search_result().options[0].combination.hotel.model_copy(update={"room_name": None})
     recommendation = recommendation.model_copy(
         update={
             "proposal": recommendation.proposal.model_copy(
                 update={
                     "trip_option": trip_option.model_copy(
-                        update={
-                            "combination": combination.model_copy(update={"hotel": hotel})
-                        }
+                        update={"combination": combination.model_copy(update={"hotel": hotel})}
                     )
                 }
             )
@@ -402,9 +439,7 @@ def test_hotel_without_room_name_keeps_map_and_booking_links_separate() -> None:
         )
     }
 
-    rendered = "\n".join(
-        format_proposal_sections((recommendation,), (copy,), checkout)
-    )
+    rendered = "\n".join(format_proposal_sections((recommendation,), (copy,), checkout))
 
     assert 'Отель: <a href="https://yandex.ru/maps/?text=' in rendered
     assert '<a href="https://www.tutu.ru/hotel/selected">забронировать</a>' in rendered
@@ -416,16 +451,15 @@ def test_card_and_program_expose_cheaper_and_faster_verified_alternatives() -> N
     cheap_combination = selected.combination.model_copy(
         update={
             "signature": "cheap-alternative",
-            "price": selected.combination.price.model_copy(
-                update={"known_total": Decimal("1500")}
-            ),
+            "price": selected.combination.price.model_copy(update={"known_total": Decimal("1500")}),
         }
     )
     fast_combination = selected.combination.model_copy(
         update={
             "signature": "fast-alternative",
-            "price": selected.combination.price.model_copy(
-                update={"known_total": Decimal("2600")}
+            "price": selected.combination.price.model_copy(update={"known_total": Decimal("2600")}),
+            "metrics": selected.combination.metrics.model_copy(
+                update={"total_travel_duration": timedelta(minutes=120)}
             ),
         }
     )
@@ -465,7 +499,105 @@ def test_card_and_program_expose_cheaper_and_faster_verified_alternatives() -> N
     assert "Что ещё можно выбрать" in program
     assert "Бюджетный" in program
     assert "Быстрый" in program
+    assert "🚗 Транспорт:" in program
+    assert "🏨 Отель:" in program
     assert program.count("Туда:") == 3
+
+
+def test_story_map_details_and_plan_contain_city_places_hotel_and_taxi() -> None:
+    recommendation = rank_proposals((proposal("city_a"),))[0]
+    proposal_value = recommendation.proposal
+    destination = proposal_value.candidate.destination.model_copy(
+        update={
+            "short_description": "Старинный город для прогулок без спешки.",
+            "full_description": (
+                "Компактный исторический город с архитектурой нескольких эпох. "
+                "Основные места удобно осмотреть пешком за выходные."
+            ),
+            "taxi_available": True,
+        }
+    )
+    candidate_value = proposal_value.candidate.model_copy(update={"destination": destination})
+    source = proposal_value.days[0].activities[0]
+    linked = source.activity.model_copy(
+        update={
+            "description": "Главный архитектурный ансамбль города.",
+            "map_url": "https://yandex.ru/maps/?text=Main%20Place",
+        }
+    )
+    days = (
+        proposal_value.days[0].model_copy(
+            update={
+                "activities": (
+                    source.model_copy(update={"activity": linked}),
+                    *proposal_value.days[0].activities[1:],
+                )
+            }
+        ),
+    )
+    hotel = (
+        search_result()
+        .options[0]
+        .combination.hotel.model_copy(
+            update={"check_in_time": time(14), "check_out_time": time(12)}
+        )
+    )
+    combination = proposal_value.trip_option.combination.model_copy(update={"hotel": hotel})
+    recommendation = recommendation.model_copy(
+        update={
+            "proposal": proposal_value.model_copy(
+                update={
+                    "candidate": candidate_value,
+                    "days": days,
+                    "trip_option": proposal_value.trip_option.model_copy(
+                        update={"combination": combination}
+                    ),
+                }
+            )
+        }
+    )
+
+    checkout_items = (
+        TripCheckoutItem(
+            component=TripComponent.OUTBOUND,
+            link=CheckoutLink(
+                url="https://www.tutu.ru/booking/exact-outbound",
+                kind="deeplink",
+            ),
+        ),
+        TripCheckoutItem(
+            component=TripComponent.RETURN,
+            link=CheckoutLink(
+                url="https://www.tutu.ru/booking/exact-return",
+                kind="deeplink",
+            ),
+        ),
+        TripCheckoutItem(
+            component=TripComponent.HOTEL,
+            link=CheckoutLink(
+                url="https://www.tutu.ru/hotel/exact",
+                kind="hotel_page",
+            ),
+        ),
+    )
+    details = format_details(recommendation, checkout_items)
+    plan = format_program(recommendation, checkout_items)
+
+    assert "Подробнее:" in details
+    assert "Фото и отзывы" in details
+    assert "Main%20Place" in details
+    assert "Стоимость транспорта" in details
+    assert "Цена:" in details
+    assert "booking/exact-outbound" in details
+    assert "booking/exact-return" in details
+    assert "hotel/exact" in details
+    assert "Заезд:" in plan and "14:00" in plan
+    assert "Выезд:" in plan and "12:00" in plan
+    assert "Такси в городе: да" in plan
+    assert "booking/exact-outbound" in plan
+    assert "booking/exact-return" in plan
+    assert "hotel/exact" in plan
+    assert "https://yandex.ru/maps/?text=" in plan
 
 
 @pytest.mark.asyncio
@@ -484,8 +616,9 @@ async def test_complete_ideas_request_reaches_verified_proposals_end_to_end() ->
     assert len(narration.calls) == 1
     assert context.user_data["discovery_revision"] == 1
     final_call = status.edit_text.call_args_list[-1]
-    assert "поездки, которые реально складываются" in final_call.args[0]
+    assert "куда можно уехать" in final_call.args[0]
     keyboard = final_call.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "Решились? Подобрать варианты"
     callbacks = [
         button.callback_data
         for row in keyboard.inline_keyboard
@@ -494,6 +627,14 @@ async def test_complete_ideas_request_reaches_verified_proposals_end_to_end() ->
     ]
     assert callbacks
     assert all(len(item.encode()) <= 64 for item in callbacks)
+
+    compare_query = SimpleNamespace(
+        data=keyboard.inline_keyboard[0][0].callback_data,
+        answer=AsyncMock(),
+        message=incoming,
+    )
+    await service.callback(SimpleNamespace(callback_query=compare_query), context)
+    assert "поездки, которые реально складываются" in incoming.edit_text.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -561,6 +702,55 @@ async def test_date_follow_up_is_applied_immediately_without_second_llm_call() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer_text", "expected"),
+    [
+        ("завтра и послезавтра", (date(2026, 7, 23), date(2026, 7, 24))),
+        ("в эти выходные", (date(2026, 7, 25), date(2026, 7, 26))),
+        ("25-26 авг", (date(2026, 8, 25), date(2026, 8, 26))),
+        ("25-26 авг 2026", (date(2026, 8, 25), date(2026, 8, 26))),
+    ],
+)
+async def test_natural_date_follow_ups_continue_discovery(answer_text, expected) -> None:
+    incomplete = complete_draft(departure_date=None, return_date=None)
+    service, extractor, selector, *_ = conversation(parsed(incomplete))
+    context = SimpleNamespace(user_data={})
+    incoming, _ = telegram_message("Хочу молодёжно потусить")
+    assert await service.intake(telegram_update(incoming), context) is DiscoveryState.CLARIFY
+
+    answer, _ = telegram_message(answer_text)
+    state = await service.clarification_input(telegram_update(answer), context)
+
+    assert state is DiscoveryState.RESULTS
+    assert len(extractor.calls) == 1
+    assert len(selector.calls) == 1
+    request = selector.calls[0]
+    assert (request.dates.start, request.dates.end) == expected
+
+
+@pytest.mark.asyncio
+async def test_broad_month_is_clarified_without_leaking_validation_details() -> None:
+    broad_month = complete_draft(
+        departure_date=date(2026, 8, 1),
+        return_date=date(2026, 8, 31),
+    )
+    service, extractor, selector, *_ = conversation(parsed(broad_month))
+    context = SimpleNamespace(user_data={})
+    incoming, _ = telegram_message("В августе хочу в небольшой город прогуляться")
+
+    state = await service.intake(telegram_update(incoming), context)
+
+    assert state is DiscoveryState.CLARIFY
+    assert context.user_data["discovery_pending_field"] == "dates"
+    reply = incoming.reply_text.call_args_list[-1].args[0]
+    assert "конкретные даты" in reply
+    assert "validation error" not in reply
+    assert "pydantic" not in reply.casefold()
+    assert len(extractor.calls) == 1
+    assert not selector.calls
+
+
+@pytest.mark.asyncio
 async def test_mapping_failure_is_reported_as_technical_not_as_bad_user_input() -> None:
     service, *_ = conversation(LlmParseError("invalid confidence"))
     context = SimpleNamespace(user_data={})
@@ -621,7 +811,14 @@ async def test_stale_revision_is_rejected_and_recheck_uses_existing_shortlist() 
     context = SimpleNamespace(user_data={})
     incoming, status = telegram_message("Идея")
     await service.intake(telegram_update(incoming), context)
-    keyboard = status.edit_text.call_args_list[-1].kwargs["reply_markup"]
+    inspiration_keyboard = status.edit_text.call_args_list[-1].kwargs["reply_markup"]
+    compare_query = SimpleNamespace(
+        data=inspiration_keyboard.inline_keyboard[0][0].callback_data,
+        answer=AsyncMock(),
+        message=incoming,
+    )
+    await service.callback(SimpleNamespace(callback_query=compare_query), context)
+    keyboard = incoming.edit_text.call_args.kwargs["reply_markup"]
     details_data = keyboard.inline_keyboard[0][0].callback_data
     recheck_data = keyboard.inline_keyboard[-2][1].callback_data
 
@@ -705,9 +902,40 @@ async def test_refinement_can_change_explicit_hotel_requirement() -> None:
 
     assert state is DiscoveryState.RESULTS
     assert context.user_data["discovery_draft"].hotel_mode is HotelMode.FORBIDDEN
-    assert context.user_data["discovery_shortlist"].request.dates.start == context.user_data[
-        "discovery_shortlist"
-    ].request.dates.end
+    assert (
+        context.user_data["discovery_shortlist"].request.dates.start
+        == context.user_data["discovery_shortlist"].request.dates.end
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_prompt_after_comparison_replaces_previous_preferences() -> None:
+    replacement = complete_draft(
+        origin=None,
+        budget="12000",
+        experience=ExperienceProfile(interests={"nature"}),
+    )
+    service, *_ = conversation(parsed(complete_draft()), parsed(replacement))
+    context = SimpleNamespace(user_data={})
+    incoming, status = telegram_message("Хочу архитектуру")
+    await service.intake(telegram_update(incoming), context)
+    inspiration_keyboard = status.edit_text.call_args.kwargs["reply_markup"]
+    compare = SimpleNamespace(
+        data=inspiration_keyboard.inline_keyboard[0][0].callback_data,
+        answer=AsyncMock(),
+        message=incoming,
+    )
+    await service.callback(SimpleNamespace(callback_query=compare), context)
+    replacement_message, _ = telegram_message("Теперь хочу природу, до 12 тысяч")
+
+    state = await service.refine_input(telegram_update(replacement_message), context)
+
+    assert state is DiscoveryState.RESULTS
+    draft = context.user_data["discovery_draft"]
+    assert draft.origin == "Москва"
+    assert draft.budget == 12000
+    assert draft.experience.interests == {"nature"}
+    assert "architecture" not in draft.experience.interests
 
 
 @pytest.mark.asyncio
@@ -718,7 +946,14 @@ async def test_details_reject_reason_and_handoff_remain_inside_current_revision(
     incoming, status = telegram_message("Идея")
     await service.intake(telegram_update(incoming), context)
     context.user_data["discovery_feasibility"] = feasibility("city_a")
-    keyboard = status.edit_text.call_args_list[-1].kwargs["reply_markup"]
+    inspiration_keyboard = status.edit_text.call_args_list[-1].kwargs["reply_markup"]
+    compare_query = SimpleNamespace(
+        data=inspiration_keyboard.inline_keyboard[0][0].callback_data,
+        answer=AsyncMock(),
+        message=incoming,
+    )
+    await service.callback(SimpleNamespace(callback_query=compare_query), context)
+    keyboard = incoming.edit_text.call_args.kwargs["reply_markup"]
 
     details_query = SimpleNamespace(
         data=keyboard.inline_keyboard[0][0].callback_data,
@@ -727,14 +962,24 @@ async def test_details_reject_reason_and_handoff_remain_inside_current_revision(
     )
     state = await service.callback(SimpleNamespace(callback_query=details_query), context)
     assert state is DiscoveryState.RESULTS
-    assert "Программа:" in incoming.reply_text.call_args.args[0]
+    assert "Подробнее:" in incoming.reply_text.call_args.args[0]
 
-    reject_query = SimpleNamespace(
-        data=keyboard.inline_keyboard[1][0].callback_data,
+    plan_query = SimpleNamespace(
+        data=keyboard.inline_keyboard[0][1].callback_data,
         answer=AsyncMock(),
         message=incoming,
     )
-    assert keyboard.inline_keyboard[1][0].text.startswith("Что не понравилось")
+    state = await service.callback(SimpleNamespace(callback_query=plan_query), context)
+    assert state is DiscoveryState.RESULTS
+    assert "План на 2 дня:" in incoming.reply_text.call_args.args[0]
+    assert "Такси в городе" in incoming.reply_text.call_args.args[0]
+
+    reject_query = SimpleNamespace(
+        data=keyboard.inline_keyboard[2][0].callback_data,
+        answer=AsyncMock(),
+        message=incoming,
+    )
+    assert keyboard.inline_keyboard[2][0].text.startswith("Что не понравилось")
     await service.callback(SimpleNamespace(callback_query=reject_query), context)
     reason_keyboard = incoming.reply_text.call_args.kwargs["reply_markup"]
     reason_query = SimpleNamespace(
@@ -747,7 +992,7 @@ async def test_details_reject_reason_and_handoff_remain_inside_current_revision(
     assert "Спасибо" in incoming.reply_text.call_args.args[0]
 
     handoff_query = SimpleNamespace(
-        data=keyboard.inline_keyboard[0][1].callback_data,
+        data=keyboard.inline_keyboard[1][0].callback_data,
         answer=AsyncMock(),
         message=incoming,
     )
@@ -854,7 +1099,7 @@ async def test_discovery_happy_path_emits_complete_allowlisted_funnel() -> None:
         "shortlist_generated",
         "verification_started",
         "verification_completed",
-        "proposals_shown",
+        "inspiration_shown",
     ]
     assert all("raw_text" not in item.dimensions for item in sink.events)
     assert all(item.flow_id == context.user_data["discovery_flow_id"] for item in sink.events)

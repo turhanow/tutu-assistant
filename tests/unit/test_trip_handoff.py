@@ -36,7 +36,7 @@ class FakeGateway:
 
     async def create_checkout_link(self, ref):
         self.calls.append(("checkout", ref))
-        return CheckoutLink(url=self.checkout_url)
+        return CheckoutLink(url=self.checkout_url, kind="deeplink")
 
 
 def fixture(name: str) -> dict:
@@ -146,11 +146,11 @@ async def test_checkout_builder_is_used_only_when_offer_has_no_direct_url() -> N
     items = await service.create_checkout_items(without_direct_urls(search_result()), 0)
 
     assert len(gateway.calls) == 3
-    assert all(not service.is_offer_specific(item) for item in items)
+    assert all(service.is_offer_specific(item) for item in items)
 
 
 @pytest.mark.asyncio
-async def test_etrain_link_is_truthfully_classified_as_schedule_not_exact_ticket() -> None:
+async def test_etrain_is_rejected_when_only_date_level_schedule_link_exists() -> None:
     result = search_result()
     option = result.options[0]
     combination = option.combination
@@ -173,12 +173,8 @@ async def test_etrain_link_is_truthfully_classified_as_schedule_not_exact_ticket
     )
     service = TripHandoffService(FakeGateway())  # type: ignore[arg-type]
 
-    items = await service.create_checkout_items(result, 0)
-
-    outbound = items[0]
-    assert outbound.link.kind == "schedule_url"
-    assert not service.is_offer_specific(outbound)
-    assert service.button_prefix(outbound) == "Открыть расписание"
+    with pytest.raises(CheckoutError, match="exact checkout links"):
+        await service.create_checkout_items(result, 0)
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from app.domain.content_models import (
 )
 from app.domain.discovery_models import DateRange, DiscoveryRequest
 from app.domain.errors import CatalogContractError, CatalogItemNotFoundError
+from app.services.map_links import build_yandex_maps_search_url
 from app.services.url_policy import require_allowed_https_url
 
 CONTENT_SOURCE_HOSTS = frozenset(
@@ -118,13 +119,7 @@ class FileDestinationCatalog:
         }
         origin = request.origin.casefold()
         candidates = (
-            item.destination.model_copy(
-                update={
-                    "activity_highlights": tuple(
-                        activity.name for activity in item.activities[:3]
-                    )
-                }
-            )
+            _decorate_profile(item)
             for item in self._repository.all_content()
             if item.destination.name.casefold() != origin
             and requested_months.intersection(item.destination.season_months)
@@ -147,4 +142,47 @@ class FileTravelContentGateway:
             raise CatalogItemNotFoundError(
                 f"destination has no content for requested season in {self._repository.version}"
             )
-        return content
+        activities = tuple(
+            activity.model_copy(
+                update={
+                    "description": activity.description
+                    or "Место для знакомства с городом; детали стоит проверить заранее.",
+                    "map_url": activity.map_url
+                    or build_yandex_maps_search_url(
+                        name=activity.name,
+                        address=activity.address,
+                        city=content.destination.name,
+                        region=content.destination.region,
+                    ),
+                }
+            )
+            for activity in content.activities
+        )
+        return content.model_copy(
+            update={
+                "destination": _decorate_profile(content),
+                "activities": activities,
+            }
+        )
+
+
+def _decorate_profile(content: DestinationContent) -> DestinationProfile:
+    names = tuple(activity.name for activity in content.activities[:4])
+    short = (
+        f"Поездка ради {names[0]} и {names[1]}."
+        if len(names) >= 2
+        else "Короткая поездка с программой под ваши интересы."
+    )
+    full = (
+        f"{content.destination.name} подходит для короткой поездки. "
+        f"В программу можно включить: {', '.join(names)}."
+        if names
+        else short
+    )
+    return content.destination.model_copy(
+        update={
+            "activity_highlights": names[:3],
+            "short_description": content.destination.short_description or short,
+            "full_description": content.destination.full_description or full,
+        }
+    )

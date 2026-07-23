@@ -452,4 +452,7 @@ def test_clarification_policy_is_bounded_and_deterministic() -> None:
 
     assert len(questions) == 3
     assert questions[0] == "Из какого города вы хотите поехать?"
-    assert questions[1] == "Какие выходные рассматриваете?"
+    assert questions[1] == (
+        "На какие конкретные даты планируем поездку? "
+        "Например: «8–9 августа» или «на ближайшие выходные»."
+    )

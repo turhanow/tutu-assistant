@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         default="https://api.openai.com/v1", alias="OPENAI_BASE_URL"
     )
     openai_model: str = Field(default="gpt-5.6-sol", alias="OPENAI_MODEL", min_length=1)
-    openai_timeout_seconds: float = Field(default=10, alias="OPENAI_TIMEOUT_SECONDS", ge=1, le=30)
+    openai_timeout_seconds: float = Field(default=25, alias="OPENAI_TIMEOUT_SECONDS", ge=1, le=30)
     openai_allow_custom_base_url: bool = Field(default=False, alias="OPENAI_ALLOW_CUSTOM_BASE_URL")
     tutu_timeout_seconds: int = Field(default=12, alias="TUTU_TIMEOUT_SECONDS", ge=3, le=60)
     tutu_pool_size: int = Field(default=5, alias="TUTU_POOL_SIZE", ge=1, le=8)

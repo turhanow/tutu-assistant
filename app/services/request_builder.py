@@ -172,9 +172,7 @@ def build_trip_request(
             "hotel_mode",
         )
     effective_return_date = (
-        draft.departure_date
-        if draft.hotel_mode is HotelMode.FORBIDDEN
-        else draft.return_date
+        draft.departure_date if draft.hotel_mode is HotelMode.FORBIDDEN else draft.return_date
     )
     if (draft.adults or 1) > 2 or draft.children > 0 or draft.rooms > 1:
         raise DraftInputError(

@@ -9,6 +9,7 @@ from app.bot.formatters import (
     format_results,
 )
 from app.domain.models import (
+    CheckoutLink,
     EventConstraint,
     HotelMode,
     HotelPreferences,
@@ -19,6 +20,7 @@ from app.domain.models import (
     TimeWindow,
     TransportMode,
     TransportPreferences,
+    TripCheckoutItem,
     TripComponent,
     TripRequest,
     TripSearchFailure,
@@ -93,6 +95,42 @@ def test_result_names_transport_for_each_direction() -> None:
     assert "rail" not in rendered
     assert "В предварительную сумму входят: дорога туда, дорога обратно, отель" in rendered
     assert "Не включено: питание, городской транспорт и активности" in rendered
+
+
+def test_known_result_links_exact_selected_transport_and_hotel() -> None:
+    checkout_items = {
+        0: (
+            TripCheckoutItem(
+                component=TripComponent.OUTBOUND,
+                link=CheckoutLink(
+                    url="https://www.tutu.ru/booking/exact-outbound",
+                    kind="deeplink",
+                ),
+            ),
+            TripCheckoutItem(
+                component=TripComponent.RETURN,
+                link=CheckoutLink(
+                    url="https://www.tutu.ru/booking/exact-return",
+                    kind="deeplink",
+                ),
+            ),
+            TripCheckoutItem(
+                component=TripComponent.HOTEL,
+                link=CheckoutLink(
+                    url="https://www.tutu.ru/hotel/exact",
+                    kind="hotel_page",
+                ),
+            ),
+        )
+    }
+
+    rendered = format_results(search_result(), checkout_items)
+
+    assert 'href="https://www.tutu.ru/booking/exact-outbound"' in rendered
+    assert 'href="https://www.tutu.ru/booking/exact-return"' in rendered
+    assert 'href="https://www.tutu.ru/hotel/exact"' in rendered
+    assert "21 августа, 19:16" in rendered
+    assert "23 августа, 16:20" in rendered
 
 
 def test_no_hotel_result_explicitly_states_that_accommodation_is_absent() -> None:

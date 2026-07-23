@@ -119,10 +119,17 @@ class ProposalBuilder:
         )
         if not content_grounded:
             trade_off = "Идеи программы подобраны AI; проверьте часы работы и условия"
+            if itinerary.contains_unverified_activities:
+                trade_off = "Часть программы отмечена как непроверенные идеи. " + trade_off
             if combination_warning:
                 trade_off = f"{combination_warning} {trade_off}"
         elif not itinerary.content_complete:
             trade_off = "Программа неполная: не удалось разместить две проверенные активности"
+        elif itinerary.contains_unverified_activities:
+            trade_off = (
+                "Часть программы отмечена как непроверенные идеи. "
+                "Проверьте часы работы и условия перед поездкой"
+            )
         elif combination_warning:
             trade_off = combination_warning
         elif cost.unknown_components:

@@ -297,6 +297,8 @@ class HotelOffer(DomainModel):
     rating: Decimal | None = Field(default=None, ge=0, le=10)
     review_count: int | None = Field(default=None, ge=0)
     room_name: str | None = None
+    check_in_time: time | None = None
+    check_out_time: time | None = None
     breakfast_included: bool | None = None
     free_cancellation: bool | None = None
     matched_amenities: frozenset[str] = frozenset()

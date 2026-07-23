@@ -143,7 +143,9 @@ class CandidateSelector:
         profile_hours = Decimal(total_microseconds) / Decimal(3_600_000_000)
         duration_delta = abs(profile_hours - requested_hours)
         duration_score = max(Decimal(0), Decimal(1) - duration_delta / Decimal(72))
-        evidence_score = Decimal(1) if profile.evidence_ids else Decimal(0)
+        evidence_score = (
+            Decimal(1) if profile.evidence_ids or profile.activity_highlights else Decimal(0)
+        )
         score = (
             Decimal("0.65") * tag_score
             + Decimal("0.20") * duration_score
@@ -152,9 +154,7 @@ class CandidateSelector:
 
         reasons: list[str] = []
         if profile.activity_highlights:
-            reasons.append(
-                "Под запрос подходят: " + "; ".join(profile.activity_highlights[:2])
-            )
+            reasons.append("Под запрос подходят: " + "; ".join(profile.activity_highlights[:2]))
         if overlap:
             labels = ", ".join(TAG_LABELS.get(tag, tag) for tag in sorted(overlap)[:2])
             reasons.append(f"Подходит по интересам: {labels}")

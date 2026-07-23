@@ -146,6 +146,8 @@ def map_hotel_search(payload: dict[str, Any]) -> list[HotelOffer]:
                     rating=decimal_value(row.get("rating")),
                     review_count=row.get("review_count"),
                     room_name=best.get("room_name"),
+                    check_in_time=_optional_time(row.get("check_in_time")),
+                    check_out_time=_optional_time(row.get("check_out_time")),
                     breakfast_included=best.get("breakfast_included"),
                     free_cancellation=best.get("free_cancellation"),
                     provider_url=best.get("checkout_url") or row.get("checkout_url"),

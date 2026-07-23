@@ -66,9 +66,9 @@ class OpenAIDestinationDiscovery:
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._content: OrderedDict[str, DestinationContent] = OrderedDict()
-        self._request_cache: OrderedDict[
-            str, tuple[datetime, tuple[DestinationProfile, ...]]
-        ] = OrderedDict()
+        self._request_cache: OrderedDict[str, tuple[datetime, tuple[DestinationProfile, ...]]] = (
+            OrderedDict()
+        )
 
     async def find_candidates(
         self,
@@ -102,7 +102,7 @@ class OpenAIDestinationDiscovery:
                     instructions=instructions,
                     input=payload,
                     text_format=DestinationDiscoveryBatch,
-                    max_output_tokens=4_000,
+                    max_output_tokens=3_500,
                     reasoning={"effort": "low"},
                     store=False,
                     timeout=self._timeout_seconds,
@@ -178,6 +178,10 @@ class OpenAIDestinationDiscovery:
                     ),
                     destination_id=destination_id,
                     name=activity.name,
+                    description=_activity_description(
+                        activity.categories,
+                        activity.duration_minutes,
+                    ),
                     categories=frozenset(activity.categories),
                     duration=timedelta(minutes=activity.duration_minutes),
                     address=activity.exact_address,
@@ -189,10 +193,14 @@ class OpenAIDestinationDiscovery:
                     ),
                 )
             )
+        short_description, full_description = _destination_descriptions(item)
         profile = DestinationProfile(
             destination_id=destination_id,
             name=item.name,
             region=item.region,
+            short_description=short_description,
+            full_description=full_description,
+            taxi_available=True,
             experience_tags=frozenset(item.experience_tags),
             typical_visit_duration=timedelta(hours=item.typical_visit_hours),
             activity_highlights=tuple(activity.name for activity in activities[:3]),
@@ -219,3 +227,37 @@ def _request_key(request: DiscoveryRequest) -> str:
 def _content_id(prefix: str, value: str) -> str:
     digest = hashlib.sha256(value.encode()).hexdigest()[:20]
     return f"{prefix}_{digest}"
+
+
+def _activity_description(categories: list[str], duration_minutes: int) -> str:
+    labels = {
+        "history": "историей",
+        "architecture": "архитектурой",
+        "museum": "музейной коллекцией",
+        "walking": "городской средой",
+        "nature": "природой",
+        "gastronomy": "местной гастрономией",
+        "culture": "культурой города",
+        "river": "городом у воды",
+        "craft": "местными ремёслами",
+    }
+    subjects = [labels[item.casefold()] for item in categories if item.casefold() in labels]
+    subject = subjects[0] if subjects else "городом"
+    hours, minutes = divmod(duration_minutes, 60)
+    if hours and minutes:
+        duration = f"{hours} ч {minutes} мин"
+    elif hours:
+        duration = f"{hours} ч"
+    else:
+        duration = f"{minutes} мин"
+    return f"Знакомство с {subject}; ориентировочно {duration}."
+
+
+def _destination_descriptions(item: DiscoveredDestination) -> tuple[str, str]:
+    names = [activity.name for activity in item.activities]
+    short = f"Поездка ради {names[0]} и {names[1]}."
+    full = (
+        f"{item.name} подходит под выбранные интересы и темп. "
+        f"Основу программы составят: {', '.join(names[:4])}."
+    )
+    return short, full

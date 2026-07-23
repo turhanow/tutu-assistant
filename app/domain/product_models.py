@@ -21,6 +21,7 @@ ALLOWED_PRODUCT_EVENTS = frozenset(
         "verification_started",
         "destination_verified",
         "verification_completed",
+        "inspiration_shown",
         "proposals_shown",
         "proposal_details_opened",
         "proposal_rejected",

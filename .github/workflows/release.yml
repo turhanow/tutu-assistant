@@ -182,6 +182,7 @@ jobs:
             TELEGRAM_WEBHOOK_SECRET=telegram-webhook-secret:2
           flags: >-
             --service-account=${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+            --ingress=all
             --min-instances=0
             --max-instances=1
             --concurrency=16

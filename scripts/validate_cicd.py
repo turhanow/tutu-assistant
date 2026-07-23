@@ -89,6 +89,7 @@ def validate() -> None:
         "workload_identity_provider:",
         "id-token: write",
         "@${{ needs.publish.outputs.digest }}",
+        "--ingress=all",
         "--min-instances=0",
         "--max-instances=1",
         "BOT_TRANSPORT=webhook",

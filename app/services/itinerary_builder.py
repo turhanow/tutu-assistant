@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from app.domain.content_models import Activity, DestinationContent
+from app.domain.content_models import Activity, DestinationContent, activity_place_identities
 from app.domain.discovery_models import DayPlan, ScheduledActivity
 from app.domain.models import RankedTripOption
 from app.services.map_links import build_yandex_maps_search_url
@@ -314,36 +314,39 @@ class ItineraryBuilder:
             "relaxed": "спокойный формат на свежем воздухе",
         }
         fallback = templates["relaxed"]
-        highlights = list(content.destination.activity_highlights)
-        if not highlights:
-            highlights = [content.destination.name]
+        ordered_keys = [*sorted(preferred), *templates]
+        unique_keys = list(dict.fromkeys(key for key in ordered_keys if key in templates))
+        seen_places = {
+            identity
+            for activity in content.activities
+            for identity in activity_place_identities(activity)
+        }
         generated: list[Activity] = []
-        for index in range(count):
-            template_key = (
-                next(iter(preferred), None)
-                if index % 2 == 0
-                else ("history" if "history" in templates else "relaxed")
-            )
+        for template_key in unique_keys:
+            if len(generated) >= count:
+                break
             pattern = templates.get(template_key, fallback)
             city = content.destination.name
-            suffix = highlights[index % len(highlights)]
-            activity_name = f"{pattern}: {suffix}"
-            generated.append(
-                Activity(
-                    activity_id=f"synthetic-{content.destination.destination_id}-{index}",
-                    destination_id=content.destination.destination_id,
+            activity_name = f"{pattern} · {city}"
+            candidate = Activity(
+                activity_id=(f"synthetic-{content.destination.destination_id}-{len(generated)}"),
+                destination_id=content.destination.destination_id,
+                name=activity_name,
+                place_name=activity_name,
+                description="Непроверенная идея: время и стоимость уточняются перед поездкой.",
+                categories=frozenset((template_key,)),
+                duration=timedelta(hours=1, minutes=30),
+                map_url=build_yandex_maps_search_url(
                     name=activity_name,
-                    description="Непроверенная идея: время и стоимость уточняются перед поездкой.",
-                    categories=frozenset((template_key or "relaxed",)),
-                    duration=timedelta(hours=1, minutes=30),
-                    address=f"{city}",
-                    map_url=build_yandex_maps_search_url(
-                        name=activity_name,
-                        city=city,
-                        region=content.destination.region,
-                    ),
-                )
+                    city=city,
+                    region=content.destination.region,
+                ),
             )
+            identities = activity_place_identities(candidate)
+            if seen_places.intersection(identities):
+                continue
+            seen_places.update(identities)
+            generated.append(candidate)
         return generated
 
     @staticmethod
@@ -354,16 +357,16 @@ class ItineraryBuilder:
         evidence = {item.evidence_id: item for item in content.evidence}
         eligible: list[Activity] = []
         invalid: list[str] = []
-        seen_names: set[str] = set()
+        seen_places: set[str] = set()
         for activity in content.activities:
-            normalized_name = " ".join(activity.name.casefold().replace("ё", "е").split())
-            if normalized_name in seen_names:
+            identities = activity_place_identities(activity)
+            if seen_places.intersection(identities):
                 invalid.append(activity.activity_id)
                 continue
             sources = (evidence[evidence_id] for evidence_id in activity.evidence_ids)
             if all(source.is_fresh_at(verified_at) for source in sources):
                 eligible.append(activity)
-                seen_names.add(normalized_name)
+                seen_places.update(identities)
             else:
                 invalid.append(activity.activity_id)
         return eligible, tuple(invalid)

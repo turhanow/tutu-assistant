@@ -10,7 +10,13 @@ from itertools import pairwise
 
 from pydantic import Field, field_validator, model_validator
 
-from app.domain.content_models import Activity, ContentId, DestinationProfile, PriceRange
+from app.domain.content_models import (
+    Activity,
+    ContentId,
+    DestinationProfile,
+    PriceRange,
+    activity_place_identities,
+)
 from app.domain.models import (
     Currency,
     DomainModel,
@@ -270,10 +276,21 @@ class DayPlan(DomainModel):
             raise ValueError("activity must start on the day plan date")
         activity_ids = [item.activity.activity_id for item in self.activities]
         suggestion_ids = [item.activity_id for item in self.suggestions]
+        if len(activity_ids) != len(set(activity_ids)):
+            raise ValueError("scheduled activities must be unique")
         if len(suggestion_ids) != len(set(suggestion_ids)):
             raise ValueError("day suggestions must be unique")
         if set(activity_ids).intersection(suggestion_ids):
             raise ValueError("scheduled activities cannot be repeated as suggestions")
+        seen_places: set[str] = set()
+        for activity in (
+            *(item.activity for item in self.activities),
+            *self.suggestions,
+        ):
+            identities = activity_place_identities(activity)
+            if seen_places.intersection(identities):
+                raise ValueError("a place cannot be repeated within one day")
+            seen_places.update(identities)
         return self
 
 
@@ -305,7 +322,7 @@ class WeekendProposal(DomainModel):
             raise ValueError("AI-generated proposal cannot claim evidence")
         if not self.suggested_activities and activity_count == 0:
             raise ValueError("proposal requires at least one activity suggestion")
-        planned = [
+        shown_activities = [
             activity
             for day in self.days
             for activity in (
@@ -313,14 +330,16 @@ class WeekendProposal(DomainModel):
                 *day.suggestions,
             )
         ]
-        planned_ids = [item.activity_id for item in planned]
-        planned_names = [
-            " ".join(item.name.casefold().replace("ё", "е").split()) for item in planned
-        ]
-        if len(planned_ids) != len(set(planned_ids)) or len(planned_names) != len(
-            set(planned_names)
-        ):
-            raise ValueError("a place cannot be repeated within one trip plan")
+        shown_activities.extend(self.suggested_activities)
+        shown_ids = [item.activity_id for item in shown_activities]
+        if len(shown_ids) != len(set(shown_ids)):
+            raise ValueError("an activity cannot be repeated within one trip plan")
+        seen_places: set[str] = set()
+        for activity in shown_activities:
+            identities = activity_place_identities(activity)
+            if seen_places.intersection(identities):
+                raise ValueError("a place cannot be repeated within one trip plan")
+            seen_places.update(identities)
         signatures = [item.combination.signature for item in self.trip_alternatives]
         if len(signatures) != len(set(signatures)):
             raise ValueError("trip alternatives must be unique")

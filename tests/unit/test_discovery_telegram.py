@@ -26,6 +26,8 @@ from app.domain.discovery_models import (
     DiscoveryProposalResult,
     DiscoveryRequest,
     ExperienceProfile,
+    FeasibilitySnapshot,
+    FeasibilityStatus,
     IntentParseResult,
     ProposalCopy,
     TravelPace,
@@ -38,6 +40,7 @@ from app.domain.models import (
     SortPreference,
     TripCheckoutItem,
     TripComponent,
+    TripSearchFailure,
 )
 from app.services.discovery_ranking import rank_proposals
 from app.services.discovery_request_builder import build_discovery_request
@@ -539,6 +542,65 @@ def test_card_and_program_expose_cheaper_and_faster_verified_alternatives() -> N
     assert program.count("Туда:") == 3
 
 
+def test_alternative_transport_and_hotel_use_the_same_inline_link_pattern() -> None:
+    recommendation = rank_proposals((proposal("city_a"),))[0]
+    selected = recommendation.proposal.trip_option
+    hotel = search_result().options[0].combination.hotel
+    alternative_combination = selected.combination.model_copy(
+        update={
+            "signature": "linked-alternative",
+            "hotel": hotel,
+        }
+    )
+    alternative = selected.model_copy(
+        update={
+            "combination": alternative_combination,
+            "labels": frozenset({SortPreference.CHEAPEST}),
+        }
+    )
+    recommendation = recommendation.model_copy(
+        update={
+            "proposal": recommendation.proposal.model_copy(
+                update={"trip_alternatives": (alternative,)}
+            )
+        }
+    )
+    checkout_items = (
+        TripCheckoutItem(
+            component=TripComponent.OUTBOUND,
+            option_signature="linked-alternative",
+            link=CheckoutLink(
+                url="https://www.tutu.ru/booking/alternative-outbound",
+                kind="deeplink",
+            ),
+        ),
+        TripCheckoutItem(
+            component=TripComponent.RETURN,
+            option_signature="linked-alternative",
+            link=CheckoutLink(
+                url="https://www.tutu.ru/booking/alternative-return",
+                kind="deeplink",
+            ),
+        ),
+        TripCheckoutItem(
+            component=TripComponent.HOTEL,
+            option_signature="linked-alternative",
+            link=CheckoutLink(
+                url="https://www.tutu.ru/hotel/alternative-room",
+                kind="hotel_page",
+            ),
+        ),
+    )
+
+    program = format_program(recommendation, checkout_items)
+
+    assert "booking/alternative-outbound" in program
+    assert "booking/alternative-return" in program
+    assert "hotel/alternative-room" in program
+    assert '🏨 Отель: <a href="https://yandex.ru/maps/?text=' in program
+    assert "номер: <a href=" in program
+
+
 def test_story_map_details_and_plan_contain_city_places_hotel_and_taxi() -> None:
     recommendation = rank_proposals((proposal("city_a"),))[0]
     proposal_value = recommendation.proposal
@@ -690,6 +752,58 @@ async def test_inline_checkout_links_are_resolved_for_verified_recommendations()
     assert set(links) == {"city_a"}
     assert links["city_a"][0].component is TripComponent.OUTBOUND
     assert len(handoff.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_inline_checkout_links_are_resolved_for_every_trip_alternative() -> None:
+    class AlternativeHandoff:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def create_checkout_items(self, result, index):
+            self.calls.append(index)
+            signature = result.options[index].combination.signature
+            return (
+                TripCheckoutItem(
+                    component=TripComponent.OUTBOUND,
+                    option_signature=signature,
+                    link=CheckoutLink(
+                        url=f"https://www.tutu.ru/booking/{signature}",
+                        kind="deeplink",
+                    ),
+                ),
+            )
+
+    handoff = AlternativeHandoff()
+    service, *_ = conversation(handoff=handoff)
+    base = proposal("city_a")
+    alternatives = tuple(
+        base.trip_option.model_copy(
+            update={
+                "combination": base.trip_option.combination.model_copy(
+                    update={"signature": f"alternative-{index}"}
+                )
+            }
+        )
+        for index in (1, 2)
+    )
+    proposal_with_alternatives = base.model_copy(update={"trip_alternatives": alternatives})
+    proposals = DiscoveryProposalResult(
+        recommendations=rank_proposals((proposal_with_alternatives,)),
+        completed_at=NOW,
+    )
+
+    links = await service._resolve_inline_checkout_items(
+        proposals,
+        feasibility("city_a"),
+    )
+
+    assert handoff.calls == [0, 1, 2]
+    assert {item.option_signature for item in links["city_a"]} == {
+        "signature-city_a",
+        "alternative-1",
+        "alternative-2",
+    }
 
 
 @pytest.mark.asyncio
@@ -1082,6 +1196,64 @@ def test_no_proposals_names_budget_and_recovery_levers_without_false_precision()
     assert "1 000 ₽" in rendered
     assert "обязательным отелем" in rendered
     assert "увеличить бюджет" in rendered
+
+
+def test_no_proposals_does_not_blame_constraints_after_provider_timeout() -> None:
+    request = build_discovery_request(
+        complete_draft(budget="15000"),
+        today=date(2026, 7, 22),
+    )
+    item = candidate("city_a")
+    shortlist = CandidateShortlist(
+        request=request,
+        candidates=(item,),
+        catalog_version="v1",
+        score_version="candidate_v1",
+    )
+    result = DiscoveryFeasibilityResult(
+        shortlist=shortlist,
+        snapshots=(
+            FeasibilitySnapshot(
+                destination_id="city_a",
+                status=FeasibilityStatus.UNAVAILABLE,
+                verified_at=NOW,
+                failures=(
+                    TripSearchFailure(
+                        category="discovery_timeout",
+                        component="trip",
+                        retryable=True,
+                        user_message="Проверка заняла слишком много времени",
+                    ),
+                ),
+            ),
+        ),
+        completed_at=NOW,
+    )
+
+    rendered = _no_proposals_message(request, feasibility=result)
+
+    assert "Tutu отвечал медленнее" in rendered
+    assert "менять бюджет и даты пока не нужно" in rendered
+    assert "ни один не уложился" not in rendered
+
+
+def test_no_proposals_for_day_trip_does_not_mention_accommodation() -> None:
+    request = build_discovery_request(
+        complete_draft(
+            departure_date=date(2026, 7, 29),
+            return_date=date(2026, 7, 29),
+            budget="15000",
+            hotel_mode=HotelMode.FORBIDDEN,
+        ),
+        today=date(2026, 7, 22),
+    )
+
+    rendered = _no_proposals_message(request)
+
+    assert "поездку одним днём" in rendered
+    assert "15 000 ₽" in rendered
+    assert "прожив" not in rendered
+    assert "отел" not in rendered
 
 
 def test_empty_candidate_shortlist_model_used_by_flow_is_valid() -> None:

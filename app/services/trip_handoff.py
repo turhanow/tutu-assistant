@@ -48,6 +48,24 @@ class TripHandoffService:
         result: TripSearchResult,
         index: int,
     ) -> tuple[TripCheckoutItem, ...]:
+        return await self._create_checkout_items(result, index, require_all=True)
+
+    async def create_available_checkout_items(
+        self,
+        result: TripSearchResult,
+        index: int,
+    ) -> tuple[TripCheckoutItem, ...]:
+        """Return every exact link available for inline rendering without all-or-none loss."""
+
+        return await self._create_checkout_items(result, index, require_all=False)
+
+    async def _create_checkout_items(
+        self,
+        result: TripSearchResult,
+        index: int,
+        *,
+        require_all: bool,
+    ) -> tuple[TripCheckoutItem, ...]:
         components = self.available_components(result, index)
         async with asyncio.timeout(15):
             resolved = await asyncio.gather(
@@ -56,7 +74,7 @@ class TripHandoffService:
         items = [item for item in resolved if item is not None]
         resolved_components = {item.component for item in items}
         required_components = set(components)
-        if not required_components.issubset(resolved_components):
+        if require_all and not required_components.issubset(resolved_components):
             raise CheckoutError("exact checkout links are unavailable for this trip option")
         return tuple(items)
 
@@ -82,7 +100,11 @@ class TripHandoffService:
             except ProviderError:
                 return None
         self._require_tutu_host(link)
-        item = TripCheckoutItem(component=component, link=link)
+        item = TripCheckoutItem(
+            component=component,
+            link=link,
+            option_signature=self._combination(result, index).signature,
+        )
         return item if self.is_offer_specific(item) else None
 
     @staticmethod

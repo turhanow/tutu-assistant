@@ -19,6 +19,8 @@ Hard constraints:
 - propose exactly 4 distinct concrete activities per city and match them to explicit user interests;
 - never repeat the same place or attraction within one city, including spelling variants,
   aliases, a parent object and an activity whose only destination is that same object;
+- for every activity set place_name to the official canonical name of its physical place or
+  area; different activities must not reuse the same place_name or exact_address;
 - provide enough variety for 2-3 activities on each day of a two-day trip;
 - order activities by relevance to this request; the first three become the city's concise,
   request-specific description before live logistics are checked;

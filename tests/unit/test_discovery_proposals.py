@@ -247,6 +247,37 @@ def test_itinerary_never_recommends_same_place_twice_under_different_ids() -> No
     assert duplicate.activity_id in result.unscheduled_activity_ids
 
 
+def test_itinerary_deduplicates_different_activities_at_same_physical_place() -> None:
+    duplicate_content = content()
+    first = duplicate_content.activities[0].model_copy(
+        update={
+            "name": "Осмотреть экспозицию",
+            "place_name": "Городской художественный музей",
+            "address": "Советская улица, 1",
+        }
+    )
+    duplicate = activity(
+        "kolomna",
+        99,
+        name="Экскурсия с гидом",
+        place_name="городской художественный музей",
+        address="Советская ул., 1",
+    )
+    duplicate_content = duplicate_content.model_copy(
+        update={"activities": (first, *duplicate_content.activities[1:], duplicate)}
+    )
+
+    result = ItineraryBuilder().build(duplicate_content, option(), verified_at=NOW)
+
+    planned_ids = {
+        item.activity_id
+        for day in result.days
+        for item in (*(scheduled.activity for scheduled in day.activities), *day.suggestions)
+    }
+    assert not {first.activity_id, duplicate.activity_id}.issubset(planned_ids)
+    assert duplicate.activity_id in result.unscheduled_activity_ids
+
+
 def test_plan_is_built_from_fallback_activities_when_no_verified_content() -> None:
     empty_content = DestinationContent(
         destination=destination(),

@@ -9,7 +9,7 @@ from html import escape
 from html.parser import HTMLParser
 
 from app.bot.formatters import TRANSPORT_ICONS, TRANSPORT_LABELS, format_money
-from app.domain.content_models import Activity
+from app.domain.content_models import Activity, activity_place_identities
 from app.domain.discovery_models import (
     CandidateShortlist,
     ProposalCopy,
@@ -82,7 +82,11 @@ def format_program(
     proposal = recommendation.proposal
     destination = proposal.candidate.destination
     combination = proposal.trip_option.combination
-    checkout_by_component = {item.component: item for item in checkout_items}
+    checkout_by_component = _checkout_items_by_component(
+        checkout_items,
+        proposal.trip_option,
+        allow_unscoped=True,
+    )
     lines = [
         f"<b>План на 2 дня: {escape(destination.name)}</b>",
         _format_total_cost(proposal),
@@ -151,6 +155,9 @@ def format_program(
                 _format_expanded_alternative(
                     option,
                     (proposal.trip_option, *proposal.trip_alternatives),
+                    checkout_items=checkout_items,
+                    destination_name=destination.name,
+                    destination_region=destination.region,
                 )
             )
     return "\n".join(lines)
@@ -163,7 +170,11 @@ def format_details(
     proposal = recommendation.proposal
     destination = proposal.candidate.destination
     combination = proposal.trip_option.combination
-    checkout_by_component = {item.component: item for item in checkout_items}
+    checkout_by_component = _checkout_items_by_component(
+        checkout_items,
+        proposal.trip_option,
+        allow_unscoped=True,
+    )
     city_url = build_yandex_maps_search_url(
         name=destination.name,
         region=destination.region,
@@ -327,7 +338,11 @@ def _format_proposal(
         if not proposal.content_grounded:
             activity_line += " · идеи AI, детали пока не проверены"
         lines.append(activity_line)
-    checkout_by_component = {item.component: item for item in checkout_items}
+    checkout_by_component = _checkout_items_by_component(
+        checkout_items,
+        proposal.trip_option,
+        allow_unscoped=True,
+    )
     lines.extend(
         (
             _format_leg(
@@ -347,24 +362,14 @@ def _format_proposal(
         )
     )
     if combination.hotel is not None:
-        hotel_checkout = checkout_by_component.get(TripComponent.HOTEL)
-        map_url = build_yandex_maps_search_url(
-            name=combination.hotel.name,
-            city=proposal.candidate.destination.name,
-            region=proposal.candidate.destination.region,
+        lines.append(
+            _format_hotel_booking_line(
+                combination.hotel,
+                destination_name=proposal.candidate.destination.name,
+                destination_region=proposal.candidate.destination.region,
+                checkout_item=checkout_by_component.get(TripComponent.HOTEL),
+            )
         )
-        hotel_name = _html_link(escape(combination.hotel.name), map_url)
-        booking_url = str(hotel_checkout.link.url) if hotel_checkout is not None else None
-        if combination.hotel.room_name:
-            room_name = escape(combination.hotel.room_name)
-            if booking_url is not None:
-                room_name = _html_link(room_name, booking_url)
-            booking = f" · номер: {room_name}"
-        elif booking_url is not None:
-            booking = f" · {_html_link('забронировать', booking_url)}"
-        else:
-            booking = ""
-        lines.append(f"🏨 Отель: {hotel_name}{booking}")
         lines.append(_format_hotel_summary(combination.hotel))
         if combination.hotel.price is not None and combination.hotel.currency is not None:
             lines.append(
@@ -453,12 +458,15 @@ def _proposal_anchor_activities(proposal: WeekendProposal) -> tuple[Activity, ..
     candidates.extend(item for day in proposal.days for item in day.suggestions)
     candidates.extend(proposal.suggested_activities)
     selected: list[Activity] = []
-    seen: set[str] = set()
+    seen_ids: set[str] = set()
+    seen_places: set[str] = set()
     for activity in candidates:
-        if activity.activity_id in seen:
+        identities = activity_place_identities(activity)
+        if activity.activity_id in seen_ids or seen_places.intersection(identities):
             continue
         selected.append(activity)
-        seen.add(activity.activity_id)
+        seen_ids.add(activity.activity_id)
+        seen_places.update(identities)
         if len(selected) == 2:
             break
     return tuple(selected)
@@ -570,6 +578,27 @@ def _format_hotel_summary(hotel: HotelOffer) -> str:
     return "Коротко об отеле: " + (", ".join(facts) if facts else "условия уточняются")
 
 
+def _format_hotel_booking_line(
+    hotel: HotelOffer,
+    *,
+    destination_name: str,
+    destination_region: str,
+    checkout_item: TripCheckoutItem | None = None,
+) -> str:
+    hotel_name = _linked_hotel_name(hotel, destination_name, destination_region)
+    booking_url = str(checkout_item.link.url) if checkout_item is not None else None
+    if hotel.room_name:
+        room_name = escape(hotel.room_name)
+        if booking_url is not None:
+            room_name = _html_link(room_name, booking_url)
+        booking = f" · номер: {room_name}"
+    elif booking_url is not None:
+        booking = f" · {_html_link('забронировать', booking_url)}"
+    else:
+        booking = ""
+    return f"🏨 Отель: {hotel_name}{booking}"
+
+
 def _format_hotel_details(
     hotel: HotelOffer,
     *,
@@ -624,6 +653,19 @@ def _linked_hotel_name(hotel: HotelOffer, city: str, region: str) -> str:
     return _html_link(escape(hotel.name), map_url)
 
 
+def _checkout_items_by_component(
+    checkout_items: Sequence[TripCheckoutItem],
+    option: RankedTripOption,
+    *,
+    allow_unscoped: bool,
+) -> dict[TripComponent, TripCheckoutItem]:
+    signature = option.combination.signature
+    scoped = {item.component: item for item in checkout_items if item.option_signature == signature}
+    if scoped or not allow_unscoped:
+        return scoped
+    return {item.component: item for item in checkout_items if item.option_signature is None}
+
+
 def _fallback_city_description(proposal: WeekendProposal) -> str:
     names = [item.name for item in _proposal_anchor_activities(proposal)]
     if not names:
@@ -659,6 +701,10 @@ def _format_trip_comparison(proposal: WeekendProposal) -> str | None:
 def _format_expanded_alternative(
     option: RankedTripOption,
     all_options: tuple[RankedTripOption, ...],
+    *,
+    checkout_items: Sequence[TripCheckoutItem] = (),
+    destination_name: str,
+    destination_region: str,
 ) -> tuple[str, ...]:
     labels = []
     if SortPreference.CHEAPEST in option.labels:
@@ -669,17 +715,44 @@ def _format_expanded_alternative(
         labels.append("быстрый")
     title = ", ".join(labels) if labels else "ещё один подходящий"
     combination = option.combination
+    checkout_by_component = _checkout_items_by_component(
+        checkout_items,
+        option,
+        allow_unscoped=False,
+    )
     lines = [f"<b>{escape(title.capitalize())}</b>"]
     transport_labels = _transport_rank_labels(option, all_options=all_options)
     hotel_labels = _hotel_rank_labels(option, all_options=all_options)
     if transport_labels:
         lines.append(f"🚗 Транспорт: {', '.join(transport_labels)}")
-    if hotel_labels:
-        lines.append(f"🏨 Отель: {', '.join(hotel_labels)}")
-    lines.append(_format_leg("Туда", combination.outbound))
-    lines.append(_format_leg("Обратно", combination.return_offer))
-    if combination.hotel is not None and not hotel_labels:
-        lines.append(f"🏨 Отель: {escape(combination.hotel.name)}")
+    if combination.hotel is None:
+        lines.append("🏨 Отель: не нужен")
+    elif hotel_labels:
+        lines.append(f"🏨 Категория отеля: {', '.join(hotel_labels)}")
+    lines.append(
+        _format_leg(
+            "Туда",
+            combination.outbound,
+            checkout_by_component.get(TripComponent.OUTBOUND),
+        )
+    )
+    lines.append(
+        _format_leg(
+            "Обратно",
+            combination.return_offer,
+            checkout_by_component.get(TripComponent.RETURN),
+        )
+    )
+    if combination.hotel is not None:
+        lines.append(
+            _format_hotel_booking_line(
+                combination.hotel,
+                destination_name=destination_name,
+                destination_region=destination_region,
+                checkout_item=checkout_by_component.get(TripComponent.HOTEL),
+            )
+        )
+        lines.append(_format_hotel_summary(combination.hotel))
     total = combination.price.known_total
     if total is not None:
         lines.append(

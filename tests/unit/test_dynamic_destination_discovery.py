@@ -48,24 +48,28 @@ def batch() -> DestinationDiscoveryBatch:
                     "activities": [
                         {
                             "name": f"Исторический центр {index}",
+                            "place_name": f"Исторический центр {index}",
                             "categories": ["history", "walking"],
                             "duration_minutes": 120,
                             "exact_address": f"Советская улица, {index + 1}",
                         },
                         {
                             "name": f"Музей {index}",
+                            "place_name": f"Музей {index}",
                             "categories": ["history", "museum"],
                             "duration_minutes": 90,
                             "exact_address": None,
                         },
                         {
                             "name": f"Набережная {index}",
+                            "place_name": f"Набережная {index}",
                             "categories": ["walking", "relaxed"],
                             "duration_minutes": 90,
                             "exact_address": f"Набережная, {index + 1}",
                         },
                         {
                             "name": f"Усадьба {index}",
+                            "place_name": f"Усадьба {index}",
                             "categories": ["history", "architecture"],
                             "duration_minutes": 90,
                             "exact_address": f"Парковая улица, {index + 1}",
@@ -127,7 +131,8 @@ async def test_dynamic_catalog_uses_structured_output_and_caches_ai_content() ->
 
 def test_dynamic_catalog_deduplicates_same_place_spelling_variants() -> None:
     parsed = batch()
-    parsed.destinations[0].activities[1].name = "  исторический   центр 0 "
+    parsed.destinations[0].activities[1].name = "Экскурсия по историческому центру"
+    parsed.destinations[0].activities[1].place_name = "  исторический   центр 0 "
     catalog = OpenAIDestinationDiscovery(
         FakeClient(FakeResponses(parsed)),  # type: ignore[arg-type]
         FakeClock(),

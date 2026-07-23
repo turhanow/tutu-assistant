@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
@@ -66,6 +67,7 @@ class Activity(DomainModel):
     activity_id: ContentId
     destination_id: ContentId
     name: str = Field(min_length=1, max_length=200)
+    place_name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, min_length=10, max_length=400)
     categories: frozenset[str] = Field(min_length=1)
     duration: timedelta = Field(gt=timedelta(0), le=timedelta(hours=12))
@@ -165,9 +167,32 @@ class DestinationContent(DomainModel):
         activity_ids = [item.activity_id for item in self.activities]
         if len(activity_ids) != len(set(activity_ids)):
             raise ValueError("activity IDs must be unique")
+        seen_places: set[str] = set()
+        for activity in self.activities:
+            identities = activity_place_identities(activity)
+            if seen_places.intersection(identities):
+                raise ValueError("destination activities must reference unique places")
+            seen_places.update(identities)
         if not self.is_ai_generated and not referenced:
             raise ValueError("curated destination content requires evidence")
         return self
+
+
+def activity_place_identities(activity: Activity) -> frozenset[str]:
+    """Return stable identities used to prevent one physical point appearing twice."""
+
+    identities = {
+        f"place:{_normalize_place_text(activity.place_name or activity.name)}",
+    }
+    if activity.address:
+        identities.add(f"address:{_normalize_place_text(activity.address)}")
+    return frozenset(identities)
+
+
+def _normalize_place_text(value: str) -> str:
+    normalized = value.casefold().replace("ё", "е")
+    normalized = re.sub(r"[^0-9a-zа-я]+", " ", normalized)
+    return " ".join(normalized.split())
 
 
 class DestinationCatalogBundle(DomainModel):

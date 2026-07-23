@@ -19,6 +19,7 @@ from app.services.destination_feasibility import (
 
 MAX_DESTINATIONS = 8
 MIN_VERIFIED_DESTINATIONS = 3
+MAX_VERIFICATION_ATTEMPTS = 2
 
 
 class DiscoveryPlanner:
@@ -38,6 +39,14 @@ class DiscoveryPlanner:
         self._timeout_seconds = timeout_seconds
 
     async def verify(self, shortlist: CandidateShortlist) -> DiscoveryFeasibilityResult:
+        """Verify candidates and retry once after a wholly transient empty result."""
+
+        result = await self._verify_once(shortlist)
+        if MAX_VERIFICATION_ATTEMPTS > 1 and _needs_transient_retry(result):
+            result = await self._verify_once(shortlist)
+        return result
+
+    async def _verify_once(self, shortlist: CandidateShortlist) -> DiscoveryFeasibilityResult:
         candidates = shortlist.candidates[:MAX_DESTINATIONS]
         if not candidates:
             return DiscoveryFeasibilityResult(
@@ -118,3 +127,17 @@ class DiscoveryPlanner:
                 ),
             ),
         )
+
+
+def _needs_transient_retry(result: DiscoveryFeasibilityResult) -> bool:
+    """Return true only when retrying can replace a technical empty result."""
+
+    has_verified_option = any(
+        snapshot.status in {FeasibilityStatus.VERIFIED, FeasibilityStatus.PARTIAL}
+        and snapshot.trip_result is not None
+        and bool(snapshot.trip_result.options)
+        for snapshot in result.snapshots
+    )
+    if has_verified_option:
+        return False
+    return any(failure.retryable for item in result.snapshots for failure in item.failures)

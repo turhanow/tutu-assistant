@@ -373,6 +373,7 @@ class CheckoutLink(DomainModel):
 class TripCheckoutItem(DomainModel):
     component: TripComponent
     link: CheckoutLink
+    option_signature: str | None = Field(default=None, min_length=1, max_length=300)
 
 
 class HotelRateDetails(DomainModel):

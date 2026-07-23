@@ -16,6 +16,7 @@ from app.domain.discovery_models import (
     RoadTolerance,
     TravelPace,
 )
+from app.domain.errors import ProviderTransientError
 from app.domain.models import (
     HotelMode,
     HotelOffer,
@@ -209,6 +210,29 @@ async def test_one_unavailable_destination_does_not_cancel_other_results() -> No
     assert by_id["city_0"].status is FeasibilityStatus.VERIFIED
     assert sum(item.status is FeasibilityStatus.VERIFIED for item in result.snapshots) == 3
     assert len(gateway.hotel_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_transient_empty_verification_retries_once_without_user_action() -> None:
+    class FirstCallFailsGateway(MultiDestinationGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts_by_leg = {}
+
+        async def search_transport(self, query):
+            key = (query.origin, query.destination, query.departure_date)
+            self.attempts_by_leg[key] = self.attempts_by_leg.get(key, 0) + 1
+            if self.attempts_by_leg[key] == 1:
+                raise ProviderTransientError("temporary provider failure")
+            return await super().search_transport(query)
+
+    gateway = FirstCallFailsGateway()
+
+    result = await planner(gateway).verify(shortlist(count=1))
+
+    assert result.snapshots[0].status is FeasibilityStatus.VERIFIED
+    assert set(gateway.attempts_by_leg.values()) == {2}
+    assert len(gateway.hotel_calls) == 1
 
 
 @pytest.mark.asyncio

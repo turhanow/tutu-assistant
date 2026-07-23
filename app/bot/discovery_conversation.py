@@ -583,8 +583,18 @@ class DiscoveryConversation:
             },
         )
         if not proposals.recommendations:
+            failure_categories = sorted(
+                {failure.category for item in feasibility.snapshots for failure in item.failures}
+            )
+            logger.info(
+                "discovery_verification_empty",
+                extra={
+                    "event": "discovery_verification_empty",
+                    "failure_categories": failure_categories,
+                },
+            )
             await progress.edit_text(
-                _no_proposals_message(shortlist.request),
+                _no_proposals_message(shortlist.request, feasibility=feasibility),
                 reply_markup=self._result_controls_keyboard(context),
             )
             return DiscoveryState.RESULTS
@@ -720,16 +730,30 @@ class DiscoveryConversation:
             return {}
 
         async def resolve(recommendation):
-            selected = self._selected_trip_result(recommendation, feasibility)
-            if selected is None:
+            result = self._proposal_trip_result(recommendation, feasibility)
+            if result is None:
                 return None
-            try:
-                items = await self._handoff.create_checkout_items(selected, 0)
-            except (TutuAssistantError, TimeoutError, ValueError, IndexError):
-                logger.warning("inline_checkout_link_unavailable", exc_info=True)
-                return None
+            partial_resolver = getattr(self._handoff, "create_available_checkout_items", None)
+
+            async def resolve_option(index: int):
+                try:
+                    if callable(partial_resolver):
+                        return await partial_resolver(result, index)
+                    return await self._handoff.create_checkout_items(result, index)
+                except (TutuAssistantError, TimeoutError, ValueError, IndexError):
+                    logger.warning(
+                        "inline_checkout_link_unavailable",
+                        extra={"option_index": index},
+                        exc_info=True,
+                    )
+                    return ()
+
+            resolved_options = await asyncio.gather(
+                *(resolve_option(index) for index in range(len(result.options)))
+            )
+            items = tuple(item for option_items in resolved_options for item in option_items)
             destination_id = recommendation.proposal.candidate.destination.destination_id
-            return destination_id, tuple(items)
+            return destination_id, items
 
         try:
             async with asyncio.timeout(16):
@@ -758,6 +782,23 @@ class DiscoveryConversation:
         return TripSearchResult(
             request=snapshot.trip_result.request,
             options=(recommendation.proposal.trip_option,),
+            failures=snapshot.trip_result.failures,
+            searched_at=snapshot.trip_result.searched_at,
+        )
+
+    @staticmethod
+    def _proposal_trip_result(recommendation, feasibility) -> TripSearchResult | None:
+        destination_id = recommendation.proposal.candidate.destination.destination_id
+        snapshot = next(
+            (item for item in feasibility.snapshots if item.destination_id == destination_id),
+            None,
+        )
+        if snapshot is None or snapshot.trip_result is None:
+            return None
+        proposal = recommendation.proposal
+        return TripSearchResult(
+            request=snapshot.trip_result.request,
+            options=(proposal.trip_option, *proposal.trip_alternatives),
             failures=snapshot.trip_result.failures,
             searched_at=snapshot.trip_result.searched_at,
         )
@@ -1054,8 +1095,27 @@ def _price_completeness(result: DiscoveryProposalResult) -> str:
     return "unknown"
 
 
-def _no_proposals_message(request: DiscoveryRequest) -> str:
+def _no_proposals_message(
+    request: DiscoveryRequest,
+    *,
+    feasibility: DiscoveryFeasibilityResult | None = None,
+) -> str:
+    if feasibility is not None and any(
+        failure.retryable for item in feasibility.snapshots for failure in item.failures
+    ):
+        return (
+            "Не удалось завершить проверку всех направлений: Tutu отвечал медленнее обычного "
+            "или временно был недоступен. Условия поездки сохранены. Нажмите «Обновить цены» "
+            "чуть позже — менять бюджет и даты пока не нужно."
+        )
     if request.budget is not None:
+        if request.dates.start == request.dates.end:
+            return (
+                "Среди полностью проверенных вариантов ни один не уложился во все условия, "
+                f"включая бюджет до {format_money(request.budget, request.currency)} и поездку "
+                "одним днём. Попробуйте увеличить бюджет, выбрать другую дату или увеличить "
+                "допустимое время в дороге."
+            )
         hotel_required = request.hotel_mode is HotelMode.REQUIRED
         hotel_hint = "с обязательным отелем" if hotel_required else "с условиями проживания"
         recovery = (

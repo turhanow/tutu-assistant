@@ -277,6 +277,25 @@ def test_day_plan_rejects_overlapping_activities() -> None:
         DayPlan(date=date(2026, 8, 22), activities=(first, second))
 
 
+def test_day_plan_rejects_different_activities_at_same_place() -> None:
+    museum = activity(
+        "museum_exhibition",
+        name="Постоянная экспозиция",
+        place_name="Городской музей",
+    )
+    guided_tour = activity(
+        "museum_tour",
+        name="Экскурсия с гидом",
+        place_name="городской музей",
+    )
+
+    with pytest.raises(ValidationError, match="within one day"):
+        DayPlan(
+            date=date(2026, 8, 22),
+            suggestions=(museum, guided_tour),
+        )
+
+
 def test_complete_proposal_requires_two_anchor_activities() -> None:
     candidate = DestinationCandidate(
         destination=destination(),
@@ -310,8 +329,16 @@ def test_proposal_rejects_same_place_repeated_across_trip_days() -> None:
         match_score="0.85",
         match_reasons=("Архитектура соответствует интересам",),
     )
-    first = activity("place_one", name="Нижегородский кремль")
-    duplicate = activity("place_alias", name="  нижегородский   кремль ")
+    first = activity(
+        "place_one",
+        name="Самостоятельная прогулка",
+        place_name="Нижегородский кремль",
+    )
+    duplicate = activity(
+        "place_alias",
+        name="Экскурсия с гидом",
+        place_name="  нижегородский   кремль ",
+    )
 
     with pytest.raises(ValidationError, match="cannot be repeated"):
         WeekendProposal(

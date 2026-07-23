@@ -11,7 +11,12 @@ from datetime import datetime, timedelta
 from openai import APIConnectionError, APITimeoutError, AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.domain.content_models import Activity, DestinationContent, DestinationProfile
+from app.domain.content_models import (
+    Activity,
+    DestinationContent,
+    DestinationProfile,
+    activity_place_identities,
+)
 from app.domain.discovery_models import DateRange, DiscoveryRequest
 from app.domain.errors import CatalogItemNotFoundError, LlmParseError, LlmProviderError
 from app.ports.clock import Clock
@@ -26,6 +31,7 @@ class DiscoveredActivity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=2, max_length=200)
+    place_name: str = Field(min_length=2, max_length=200)
     categories: list[str] = Field(min_length=1, max_length=4)
     duration_minutes: int = Field(ge=30, le=720)
     exact_address: str | None = Field(default=None, min_length=3, max_length=300)
@@ -170,35 +176,36 @@ class OpenAIDestinationDiscovery:
     def _map_destination(self, item: DiscoveredDestination) -> DestinationContent:
         destination_id = _content_id("city", item.name.casefold())
         activities: list[Activity] = []
-        seen_activity_names: set[str] = set()
+        seen_places: set[str] = set()
         for activity in item.activities:
-            normalized_name = " ".join(activity.name.casefold().replace("ё", "е").split())
-            if normalized_name in seen_activity_names:
-                continue
-            seen_activity_names.add(normalized_name)
-            activities.append(
-                Activity(
-                    activity_id=_content_id(
-                        "activity", f"{destination_id}:{activity.name.casefold()}"
-                    ),
-                    destination_id=destination_id,
-                    name=activity.name,
-                    description=_activity_description(
-                        activity.categories,
-                        activity.duration_minutes,
-                    ),
-                    categories=frozenset(activity.categories),
-                    duration=timedelta(minutes=activity.duration_minutes),
+            mapped = Activity(
+                activity_id=_content_id(
+                    "activity",
+                    f"{destination_id}:{activity.place_name.casefold()}:{activity.name.casefold()}",
+                ),
+                destination_id=destination_id,
+                name=activity.name,
+                place_name=activity.place_name,
+                description=_activity_description(
+                    activity.categories,
+                    activity.duration_minutes,
+                ),
+                categories=frozenset(activity.categories),
+                duration=timedelta(minutes=activity.duration_minutes),
+                address=activity.exact_address,
+                map_url=build_yandex_maps_search_url(
+                    name=activity.place_name,
                     address=activity.exact_address,
-                    map_url=build_yandex_maps_search_url(
-                        name=activity.name,
-                        address=activity.exact_address,
-                        city=item.name,
-                        region=item.region,
-                    ),
-                )
+                    city=item.name,
+                    region=item.region,
+                ),
             )
-        short_description, full_description = _destination_descriptions(item)
+            identities = activity_place_identities(mapped)
+            if seen_places.intersection(identities):
+                continue
+            seen_places.update(identities)
+            activities.append(mapped)
+        short_description, full_description = _destination_descriptions(item, activities)
         profile = DestinationProfile(
             destination_id=destination_id,
             name=item.name,
@@ -258,15 +265,11 @@ def _activity_description(categories: list[str], duration_minutes: int) -> str:
     return f"Знакомство с {subject}; ориентировочно {duration}."
 
 
-def _destination_descriptions(item: DiscoveredDestination) -> tuple[str, str]:
-    names: list[str] = []
-    seen: set[str] = set()
-    for activity in item.activities:
-        normalized = " ".join(activity.name.casefold().replace("ё", "е").split())
-        if normalized in seen:
-            continue
-        names.append(activity.name)
-        seen.add(normalized)
+def _destination_descriptions(
+    item: DiscoveredDestination,
+    activities: list[Activity],
+) -> tuple[str, str]:
+    names = [activity.name for activity in activities]
     short = (
         f"В программе — {names[0]} и {names[1]}."
         if len(names) >= 2

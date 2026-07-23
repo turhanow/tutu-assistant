@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from decimal import Decimal
 
-from app.domain.content_models import Activity
+from app.domain.content_models import Activity, activity_place_identities
 from app.domain.discovery_models import (
     DiscoveryFeasibilityResult,
     DiscoveryProposalResult,
@@ -145,26 +145,27 @@ class ProposalBuilder:
                 *day.suggestions,
             )
         }
-        planned_names = {
-            " ".join(activity.name.casefold().replace("ё", "е").split())
+        planned_places = {
+            identity
             for day in itinerary.days
             for activity in (
                 *(item.activity for item in day.activities),
                 *day.suggestions,
             )
+            for identity in activity_place_identities(activity)
         }
         additional_activities: list[Activity] = []
-        additional_names: set[str] = set()
+        additional_places: set[str] = set()
         for activity in content.activities:
-            normalized_name = " ".join(activity.name.casefold().replace("ё", "е").split())
+            identities = activity_place_identities(activity)
             if (
                 activity.activity_id in planned_ids
-                or normalized_name in planned_names
-                or normalized_name in additional_names
+                or planned_places.intersection(identities)
+                or additional_places.intersection(identities)
             ):
                 continue
             additional_activities.append(activity)
-            additional_names.add(normalized_name)
+            additional_places.update(identities)
             if len(additional_activities) == 4:
                 break
         return WeekendProposal(

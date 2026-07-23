@@ -136,6 +136,7 @@ async def test_checkout_returns_separate_tutu_links_for_all_components() -> None
     ]
     assert not gateway.calls
     assert all(service.is_offer_specific(item) for item in items)
+    assert {item.option_signature for item in items} == {"fixture"}
 
 
 @pytest.mark.asyncio
